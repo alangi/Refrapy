@@ -480,6 +480,38 @@ class Refrapick(Tk):
         }
         return state
 
+    def _geometrySignature(self, i):
+
+        sx = round(float(self.sources[i]), 3)
+        nch = int(self.nchannels[i])
+        sr = int(self.samplingRates[i])
+        ns = 0
+        if self.tracesData[i] and len(self.tracesData[i]) > 0:
+            ns = len(self.tracesData[i][0])
+
+        rx = self.receiverPositions[i] if i < len(self.receiverPositions) else []
+        rx_ok = True
+
+        if not rx or len(rx) != nch:
+            rx_ok = False
+        else:
+            for v in rx:
+                try:
+                    if not np.isfinite(float(v)):
+                        rx_ok = False
+                        break
+                except Exception:
+                    rx_ok = False
+                    break
+
+        if rx_ok:
+            return (sx, tuple(round(float(x), 3) for x in rx), sr, ns)
+
+        rx0 = round(float(self.x1s[i]), 3)
+        rxl = round(float(self.xends[i]), 3)
+        dx = round(float(self.dxs[i]), 3)
+        return (sx, nch, dx, rx0, rxl, sr, ns)
+
     def _applyMuteState(self, shot, trace_index):
 
         if self.mutedTraces[shot][trace_index]:
@@ -569,19 +601,18 @@ class Refrapick(Tk):
         if not self.sts:
             return
 
-        nstack = simpledialog.askinteger("Refrapick", "Enter stack size (consecutive records):")
-
-        if nstack is None:
-            return
-        if nstack < 2:
-            messagebox.showerror("Refrapick", "Stack size must be an integer >= 2.")
-            return
-        if nstack > len(self.sts):
-            messagebox.showerror("Refrapick", "Stack size cannot be greater than the number of records.")
-            return
-
         if self.sts_original is None:
             self.sts_original = self._buildCurrentStateSnapshot()
+
+        groups = {}
+        group_order = []
+
+        for i in range(len(self.sts)):
+            sig = self._geometrySignature(i)
+            if sig not in groups:
+                groups[sig] = []
+                group_order.append(sig)
+            groups[sig].append(i)
 
         stacked_state = {
             "sts": [],
@@ -602,15 +633,15 @@ class Refrapick(Tk):
             "mutedTraces": [],
         }
 
-        for g0 in range(0, len(self.sts), nstack):
+        for sig in group_order:
 
-            gidx = list(range(g0, min(g0 + nstack, len(self.sts))))
+            gidx = groups[sig]
             ibase = gidx[0]
             nch = self.nchannels[ibase]
 
             for idx in gidx:
                 if self.nchannels[idx] != nch:
-                    messagebox.showerror("Refrapick", "All records in each stack group must have the same number of traces.")
+                    messagebox.showerror("Refrapick", "Stacking aborted: grouped records have inconsistent channel counts.")
                     return
 
             st_group = self.sts[ibase].copy()
@@ -625,7 +656,10 @@ class Refrapick(Tk):
                 valid_time = []
 
                 for idx in gidx:
-                    if not self.mutedTraces[idx][j]:
+                    is_muted = False
+                    if idx < len(self.mutedTraces) and j < len(self.mutedTraces[idx]):
+                        is_muted = self.mutedTraces[idx][j]
+                    if not is_muted:
                         valid_data.append(np.asarray(self.tracesData[idx][j]))
                         valid_time.append(np.asarray(self.tracesTime[idx][j]))
 
@@ -650,7 +684,7 @@ class Refrapick(Tk):
                 traces_time_original_group.append(np.asarray(stacked_time).copy())
 
             stacked_state["sts"].append(st_group)
-            stacked_state["stNames"].append("Stack %d: %s" % (len(stacked_state["sts"]), self.stNames[ibase]))
+            stacked_state["stNames"].append("%s | stacked repeats = %d" % (self.stNames[ibase], len(gidx)))
             stacked_state["dxs"].append(self.dxs[ibase])
             stacked_state["sources"].append(self.sources[ibase])
             stacked_state["x1s"].append(self.x1s[ibase])
@@ -668,7 +702,7 @@ class Refrapick(Tk):
 
         self._rebuildWaveformsFromState(stacked_state)
         self.isStacked = True
-        messagebox.showinfo("Refrapick", "Stacking complete: %d record(s) available." % len(self.sts))
+        messagebox.showinfo("Refrapick", "Geometry-based stacking complete: %d grouped record(s)." % len(self.sts))
 
     def kill(self):
 
@@ -1224,7 +1258,7 @@ class Refrapick(Tk):
             if self.velMode: self.appVelMode()
             if self.editMode: self.toggleEditMode()
             
-            files = filedialog.askopenfilenames(title='Open', initialdir = self.projPath+"/data/", filetypes=[('SEG2 file', '*.dat,*.sg2,*.seg2'),
+            files = filedialog.askopenfilenames(title='Open', initialdir = self.projPath+"/data/", filetypes=[('SEG2 file', '*.dat *.sg2 *.seg2'),
                                                                                                             ('SEGY file', '*.sgy'),
                                                                                                             ('SU file', '*.su')])
 
@@ -1973,10 +2007,18 @@ E-mail: vjs279@hotmail.com
 
                                         #s = where(sgx == self.sources[i])[0][0]+1
                                         #g = where(sgx == xpick)[0][0]+1
-                                        s = isclose(array(sgx), array(self.sources[i])).nonzero()[0]+1
-                                        g = isclose(array(sgx), array(xpick)).nonzero()[0]+1
-                                        t = tpick
-                                        outFile.write("%d %d %.6f\n"%(s,g,t))
+                                        s_idx = np.flatnonzero(np.isclose(np.asarray(sgx), self.sources[i]))
+                                        g_idx = np.flatnonzero(np.isclose(np.asarray(sgx), xpick))
+
+                                        if s_idx.size == 0 or g_idx.size == 0:
+                                            # Skip or raise — skipping is safer for batch export
+                                            continue
+
+                                        s = int(s_idx[0]) + 1
+                                        g = int(g_idx[0]) + 1
+                                        t = float(tpick)
+
+                                        outFile.write(f"{s} {g} {t:.6f}\n")
 
                 else:
 
@@ -1999,20 +2041,22 @@ E-mail: vjs279@hotmail.com
                             
                             outFile.write("%d # measurements\n#s g t\n"%nMeasurements)
 
-                            for i in range(len(self.sts)):
+                            for xpick, tpick in zip(sortedxpicks, sortedtpicks):
 
-                                xinds = array(self.xpicks[i]).argsort()
-                                sortedxpicks = array(self.xpicks[i])[xinds]
-                                sortedtpicks = array(self.tpicks[i])[xinds]     
+                                #s = where(sgx == self.sources[i])[0][0]+1
+                                #g = where(sgx == xpick)[0][0]+1
+                                s_idx = np.flatnonzero(np.isclose(np.asarray(sgx), self.sources[i]))
+                                g_idx = np.flatnonzero(np.isclose(np.asarray(sgx), xpick))
 
-                                for xpick, tpick in zip(sortedxpicks, sortedtpicks):
+                                if s_idx.size == 0 or g_idx.size == 0:
+                                    # Skip or raise — skipping is safer for batch export
+                                    continue
 
-                                    #s = where(sgx == self.sources[i])[0][0]+1
-                                    #g = where(sgx == xpick)[0][0]+1
-                                    s = isclose(array(sgx), array(self.sources[i])).nonzero()[0]+1
-                                    g = isclose(array(sgx), array(xpick)).nonzero()[0]+1
-                                    t = tpick
-                                    outFile.write("%d %d %.6f\n"%(s,g,t))
+                                s = int(s_idx[0]) + 1
+                                g = int(g_idx[0]) + 1
+                                t = float(tpick)
+
+                                outFile.write(f"{s} {g} {t:.6f}\n")
                                     
                                     
                 messagebox.showinfo(title="Refrapick", message="The pick file has been saved!")

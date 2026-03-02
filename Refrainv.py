@@ -248,7 +248,7 @@ E-mail: vjs279@hotmail.com
         self.timeterms_3d_ready = False
         self.showMerged = False
         self.z2elev = False
-        self.hideOutsideCoverage = False
+        self.hideOutsideCoverage = True
         self.coverageVector = None
         self.tomoContourSettings = None
     
@@ -941,8 +941,9 @@ E-mail: vjs279@hotmail.com
                     self.coverageVector = None
 
             if self.coverageVector is not None and len(self.coverageVector) == len(model):
-                model = model.copy()
-                model[np.asarray(self.coverageVector) == 0] = np.nan
+                modelMasked = model.copy()
+                modelMasked[np.asarray(self.coverageVector) == 0] = np.nan
+                return modelMasked
 
         return model
 

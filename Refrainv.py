@@ -19,6 +19,7 @@ from scipy.signal import resample
 from scipy.interpolate import interp1d,griddata
 from numpy import array, where, polyfit, linspace, meshgrid, column_stack, c_, savetxt, shape,reshape,concatenate, hstack, linalg, mean, sqrt, zeros, arange, linspace, square, sort, unique
 from numpy import all as np_all
+import numpy as np
 from Pmw import initialise, Balloon
 import pygimli as pg
 from pygimli.physics import TravelTimeManager
@@ -208,6 +209,7 @@ E-mail: vjs279@hotmail.com
         self.dataArts = []
         self.data_sourcesArts = []
         self.data_pg = False
+        self.mgr = None
         self.tomoPlot = False
         self.timetermsPlot = False
         self.timetermsInv = False
@@ -246,6 +248,9 @@ E-mail: vjs279@hotmail.com
         self.timeterms_3d_ready = False
         self.showMerged = False
         self.z2elev = False
+        self.hideOutsideCoverage = False
+        self.coverageVector = None
+        self.tomoContourSettings = None
     
     def kill(self):
 
@@ -923,6 +928,109 @@ E-mail: vjs279@hotmail.com
         self.ax_timeterms.xaxis.set_ticks_position('bottom')
         self.timetermsPlot = False
         self.fig_timeterms.canvas.draw()
+
+    def _getTomographyModelForDisplay(self):
+
+        model = np.asarray(self.mgr.model)
+
+        if self.hideOutsideCoverage:
+            if self.coverageVector is None:
+                try:
+                    self.coverageVector = np.asarray(self.mgr.standardizedCoverage())
+                except Exception:
+                    self.coverageVector = None
+
+            if self.coverageVector is not None and len(self.coverageVector) == len(model):
+                model = model.copy()
+                model[np.asarray(self.coverageVector) == 0] = np.nan
+
+        return model
+
+    def _plotTomographyContourModel(self, nx, ny, nlevels):
+
+        if self.tomoPlot:
+            self.clearTomoPlot()
+
+        xzv = column_stack((self.mgr.paraDomain.cellCenters(), self._getTomographyModelForDisplay()))
+        x = (xzv[:,0])
+        z = (xzv[:,1])
+        v = (xzv[:,3])
+
+        self.tomoModel_x = x
+        self.tomoModel_z = z
+        self.tomoModel_v = np.asarray(self.mgr.model)
+        self.tomoContourSettings = (nx, ny, nlevels)
+
+        x_grid = linspace(min(x), max(x), nx)
+        y_grid = linspace(min(z), max(z), ny)
+        xi,zi = meshgrid(x_grid,y_grid)
+        vi = griddata((x, z), v,(xi,zi), method = 'linear')
+
+        cm = self.ax_tomography.contourf(xi, zi, vi, levels=nlevels, cmap=self.colormap,
+                                         extend="both", vmin=self.minVelLimit, vmax=self.maxVelLimit)
+        self.cmPlot = cm
+
+        divider = make_axes_locatable(self.ax_tomography)
+        cax = divider.append_axes("right", size="2%", pad=0.05)
+        self.fig_tomography.colorbar(cm,orientation="vertical", label = "[m/s]", format='%d',cax=cax)
+
+        x2max = [max(self.sgx)]
+        x2min = [min(self.sgx)]
+        
+        for i in range(len(self.sources)):
+            x2max.append(max(self.xdata[i]))
+            x2min.append(min(self.xdata[i]))
+        
+        xlim = sorted(self.sgx)+[max(x2max),min(x2min)]
+        zlim = self.sgz+[self.tomoMesh.yMin(),self.tomoMesh.yMin()]
+
+        self.topographyx, self.topographyz = [], []
+
+        for i in range(len(self.sgx)):
+            if self.sgx[i] <= max(x2max) and self.sgx[i] >= min(x2min):
+                self.topographyx.append(self.sgx[i])
+                self.topographyz.append(self.sgz[i])
+
+        xblank, zblank = [], []
+
+        for i in range(len(xlim)):
+            if xlim[i] <= max(x2max) and xlim[i] >= min(x2min):
+                if xlim[i] not in xblank:
+                    xblank.append(xlim[i])
+                    zblank.append(zlim[i])
+
+        xblank = xlim
+        zblank = zlim
+                
+        self.xbln = xblank
+        self.zbln = zblank
+
+        self.ax_tomography.plot(self.topographyx, self.topographyz, c= "k", lw = 1.5)
+        
+        limits = [(i,j) for i,j in zip(xblank,zblank)]
+        
+        clippath = Path(limits)
+        patch = PathPatch(clippath, facecolor='none', alpha = 0)
+        self.ax_tomography.add_patch(patch)
+
+        patch = PathPatch(clippath, facecolor='none', alpha = 0)
+        self.ax_tomography.add_patch(patch)
+
+        for c in cm.collections:
+            c.set_clip_path(patch)
+
+        if self.showRayPath:
+            self.mgr.drawRayPaths(self.ax_tomography,color=self.rayPathColor)
+
+        if self.showSources:
+            self.sourcesPlot_tomography = self.ax_tomography.scatter(self.sx,self.sz, marker="*",c="y",edgecolor="k",s=self.dx*20,zorder=99)
+
+        if self.showGeophones:
+            self.geophonesPlot_tomography = self.ax_tomography.scatter(self.gx,self.gz, marker=7,c="k",s=self.dx*10,zorder=99)
+            
+        self.ax_tomography.set_xlim(min(x2min),max(x2max))
+        self.fig_tomography.canvas.draw()
+        self.tomoPlot = True
                 
     def runTomography(self):
 
@@ -1012,96 +1120,11 @@ E-mail: vjs279@hotmail.com
                 vest = self.mgr.invert(data=self.data_pg,mesh=self.tomoMesh,verbose=False,lam=lam,zWeight=zWeigh,useGradient=True,
                                vTop=vTop,vBottom=vBottom,maxIter=maxIter,limits=[minVelLimit,maxVelLimit],secNodes=secNodes)
                 
+                self.coverageVector = np.asarray(self.mgr.standardizedCoverage())
                 self.parameters_tomo = [maxDepth,paraDX,paraMaxCellSize,lam,zWeigh,vTop,vBottom,minVelLimit,maxVelLimit,secNodes,maxIter,
                                         int(xngrid_entry.get()),int(yngrid_entry.get()),int(nlevels_entry.get()),
                                         self.mgr.inv.maxIter,self.mgr.inv.relrms(),self.mgr.inv.chi2()]
-                plotContourModel()
-
-            def plotContourModel():
-   
-                xzv = column_stack((self.mgr.paraDomain.cellCenters(), self.mgr.model))
-                x = (xzv[:,0])
-                z = (xzv[:,1])
-                v = (xzv[:,3])
-
-                self.tomoModel_x = x
-                self.tomoModel_z = z
-                self.tomoModel_v = v
-                
-                nx = int(xngrid_entry.get())
-                ny = int(yngrid_entry.get())
-                x_grid = linspace(min(x), max(x), nx)
-                y_grid = linspace(min(z), max(z), ny)
-                xi,zi = meshgrid(x_grid,y_grid)
-                vi = griddata((x, z), v,(xi,zi), method = 'linear')
-
-                nlevels = int(nlevels_entry.get())
-                
-                cm = self.ax_tomography.contourf(xi, zi, vi, levels=nlevels,
-                                    cmap=self.colormap, extend="both")
-
-                self.cmPlot = cm
-
-                divider = make_axes_locatable(self.ax_tomography)
-                cax = divider.append_axes("right", size="2%", pad=0.05)
-
-                cbar = self.fig_tomography.colorbar(cm,orientation="vertical", label = "[m/s]",
-                             format='%d',cax=cax)
-
-                x2max = [max(self.sgx)]
-                x2min = [min(self.sgx)]
-                
-                for i in range(len(self.sources)): x2max.append(max(self.xdata[i])); x2min.append(min(self.xdata[i]))
-                
-                xlim = sorted(self.sgx)+[max(x2max),min(x2min)]
-                zlim = self.sgz+[self.tomoMesh.yMin(),self.tomoMesh.yMin()]
-
-                self.topographyx, self.topographyz = [], []
-
-                for i in range(len(self.sgx)):
-
-                    if self.sgx[i] <= max(x2max) and self.sgx[i] >= min(x2min): self.topographyx.append(self.sgx[i]); self.topographyz.append(self.sgz[i])
-
-                xblank, zblank = [], []
-
-                for i in range(len(xlim)):
-
-                    if xlim[i] <= max(x2max) and xlim[i] >= min(x2min):
-
-                        if xlim[i] not in xblank: xblank.append(xlim[i]); zblank.append(zlim[i])
-
-                xblank = xlim
-                zblank = zlim
-
-                print(xblank)
-                print(zblank)
-                
-                self.xbln = xblank
-                self.zbln = zblank
-
-                self.ax_tomography.plot(self.topographyx, self.topographyz, c= "k", lw = 1.5)
-                
-                limits = [(i,j) for i,j in zip(xblank,zblank)]
-                
-                clippath = Path(limits)
-                patch = PathPatch(clippath, facecolor='none', alpha = 0)
-                self.ax_tomography.add_patch(patch)
-
-                patch = PathPatch(clippath, facecolor='none', alpha = 0)
-                self.ax_tomography.add_patch(patch)
-
-                for c in cm.collections: c.set_clip_path(patch)
-
-                if self.showRayPath: self.mgr.drawRayPaths(self.ax_tomography,color=self.rayPathColor)
-
-                if self.showSources: self.sourcesPlot_tomography = self.ax_tomography.scatter(self.sx,self.sz, marker="*",c="y",edgecolor="k",s=self.dx*20,zorder=99)
-
-                if self.showGeophones: self.geophonesPlot_tomography = self.ax_tomography.scatter(self.gx,self.gz, marker=7,c="k",s=self.dx*10,zorder=99)
-                    
-                self.ax_tomography.set_xlim(min(x2min),max(x2max))
-                self.fig_tomography.canvas.draw()
-                self.tomoPlot = True
-                
+                self._plotTomographyContourModel(int(xngrid_entry.get()), int(yngrid_entry.get()), int(nlevels_entry.get()))
                 self.showFit()
                 tomoWindow.destroy()
 
@@ -1362,7 +1385,7 @@ E-mail: vjs279@hotmail.com
             canvas._tkcanvas.pack()
             ax_pg = fig.add_subplot(111)
             
-            pg.show(self.tomoMesh, self.mgr.model, label = "[m/s]",
+            pg.show(self.tomoMesh, self._getTomographyModelForDisplay(), label = "[m/s]",
                     cMin=self.minVelLimit,cMax=self.maxVelLimit,cMap=self.colormap,ax = ax_pg)
 
             if self.showRayPath: self.mgr.drawRayPaths(ax = ax_pg,color=self.rayPathColor)
@@ -1802,11 +1825,38 @@ E-mail: vjs279@hotmail.com
                         self.fig_tomography.canvas.draw()
                         messagebox.showinfo(title="Refrainv", message="Grid lines have been disabled!")
                         plotOptionsWindow.tkraise()
+
+        def hideOutsideCoverage():
+
+            if not self.tomoPlot:
+                messagebox.showerror(title="Refrainv", message="Run tomography inversion first.")
+                plotOptionsWindow.tkraise()
+                return
+
+            self.hideOutsideCoverage = not self.hideOutsideCoverage
+
+            if self.hideOutsideCoverage and self.coverageVector is None and self.mgr is not None:
+                try:
+                    self.coverageVector = np.asarray(self.mgr.standardizedCoverage())
+                except Exception:
+                    self.coverageVector = None
+
+            if self.tomoContourSettings is not None:
+                nx, ny, nlevels = self.tomoContourSettings
+                self._plotTomographyContourModel(nx, ny, nlevels)
+            else:
+                self.fig_tomography.canvas.draw()
+
+            if self.hideOutsideCoverage:
+                messagebox.showinfo(title="Refrainv", message="Outside-coverage areas are now hidden.")
+            else:
+                messagebox.showinfo(title="Refrainv", message="Outside-coverage areas are now shown.")
+            plotOptionsWindow.tkraise()
         
         plotOptionsWindow = Toplevel(self)
         plotOptionsWindow.title('Refrainv - Plot options')
         plotOptionsWindow.configure(bg = "#F0F0F0")
-        plotOptionsWindow.geometry("350x450")
+        plotOptionsWindow.geometry("350x500")
         plotOptionsWindow.resizable(0,0)
         plotOptionsWindow.iconbitmap("%s/images/ico_refrapy.ico"%getcwd())
         Label(plotOptionsWindow, text = "Plot options",font=("Arial", 11)).grid(row=0,column=0,sticky="EW",pady=5,padx=65)
@@ -1820,6 +1870,7 @@ E-mail: vjs279@hotmail.com
         Button(plotOptionsWindow,text="Show/hide source positions", command = sourcePosition, width = 30).grid(row = 8, column = 0,pady=5,padx=65)
         Button(plotOptionsWindow,text="Show/hide grid lines", command = gridLines, width = 30).grid(row = 9, column = 0,pady=5,padx=65)
         Button(plotOptionsWindow,text="Change traveltimes line color", command = dataLinesColor, width = 30).grid(row = 10, column = 0,pady=5,padx=65)
+        Button(plotOptionsWindow,text="Hide areas outside ray coverage", command = hideOutsideCoverage, width = 30).grid(row = 11, column = 0,pady=5,padx=65)
         
         plotOptionsWindow.tkraise()
         

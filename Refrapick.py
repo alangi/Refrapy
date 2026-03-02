@@ -14,6 +14,7 @@ from obspy.signal.filter import lowpass, highpass
 from scipy.signal import resample
 from scipy.interpolate import interp1d
 from numpy import array, where, polyfit, isclose
+import numpy as np
 from Pmw import initialise, Balloon
 import warnings
 
@@ -38,7 +39,7 @@ class Refrapick(Tk):
         labelPhoto.image = photo
         labelPhoto.grid(row=0, column =0, sticky="W")
         self.statusLabel = Label(frame_toolbar, text = "Create or load a project to start", font=("Arial", 11))
-        self.statusLabel.grid(row = 0, column = 33, sticky = "W")
+        self.statusLabel.grid(row = 0, column = 35, sticky = "W")
         initialise(self)
         self.ico_openWaveform = PhotoImage(file="%s/images/abrir.gif"%getcwd())
         self.ico_savePicks = PhotoImage(file="%s/images/salvar.gif"%getcwd())
@@ -167,69 +168,79 @@ class Refrapick(Tk):
         bt.grid(row = 0, column = 19, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Restore default traces")
+
+        bt = Button(frame_toolbar, text="Stack", command=self.stackTraces, width=6)
+        bt.grid(row = 0, column = 20, sticky="W")
+        bl = Balloon(self)
+        bl.bind(bt, "Stack consecutive records")
+
+        self.bt_editMode = Button(frame_toolbar, text="Edit/Mute", command=self.toggleEditMode, width=8)
+        self.bt_editMode.grid(row = 0, column = 21, sticky="W")
+        bl = Balloon(self)
+        bl.bind(self.bt_editMode, "Enable/disable trace mute mode")
         
         bt = Button(frame_toolbar,image=self.ico_pick,command = self.pick,width=25)
-        bt.grid(row = 0, column = 20, sticky="W")
+        bt.grid(row = 0, column = 22, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Enable/disable pick mode")
         
         bt = Button(frame_toolbar,image=self.ico_connectPick,command = self.drawPicksLine,width=25)
-        bt.grid(row = 0, column = 21, sticky="W")
+        bt.grid(row = 0, column = 23, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Connect/disconnect picks")
         
         bt = Button(frame_toolbar,image=self.ico_clearPicks,command = self.clearPicks,width=25)
-        bt.grid(row = 0, column = 22, sticky="W")
+        bt.grid(row = 0, column = 24, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Clear picks")
 
         bt = Button(frame_toolbar,image=self.ico_allPicks,command = self.allPicks,width=25)
-        bt.grid(row = 0, column = 23, sticky="W")
+        bt.grid(row = 0, column = 25, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Show/hide traveltimes picks from other files")
 
         bt = Button(frame_toolbar,image = self.ico_savePicks, command = self.savePicks,width=25)
-        bt.grid(row = 0, column = 24, sticky="W")
+        bt.grid(row = 0, column = 26, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Save pick file")
         
         bt = Button(frame_toolbar,image=self.ico_loadPicks,command = self.loadPicks,width=25)
-        bt.grid(row = 0, column = 25, sticky="W")
+        bt.grid(row = 0, column = 27, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Load pick file)")
 
         bt = Button(frame_toolbar,image=self.ico_velMode,command = self.appVelMode,width=25)
-        bt.grid(row = 0, column = 26, sticky="W")
+        bt.grid(row = 0, column = 28, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Enable/disable apparent velocity mode")
         
         bt = Button(frame_toolbar,image = self.ico_tt,command = self.viewTraveltimes,width=25)
-        bt.grid(row = 0, column = 27, sticky="W")
+        bt.grid(row = 0, column = 29, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"View observed traveltimes")
 
         bt = Button(frame_toolbar,image=self.ico_survey,command = self.viewSurvey,width=25)
-        bt.grid(row = 0, column = 28, sticky="W")
+        bt.grid(row = 0, column = 30, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"View survey geometry")
 
         bt = Button(frame_toolbar,image = self.ico_plotOptions,command = self.plotOptions,width=25)
-        bt.grid(row = 0, column = 29, sticky="W")
+        bt.grid(row = 0, column = 31, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Plot options")
         
         bt = Button(frame_toolbar,image = self.ico_options,command = self.options,width=25)
-        bt.grid(row = 0, column = 30, sticky="W")
+        bt.grid(row = 0, column = 32, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Edit acquisition parameters")
         
         bt = Button(frame_toolbar,image = self.ico_reset,command = self.reset,width=25)
-        bt.grid(row = 0, column = 31, sticky="W")
+        bt.grid(row = 0, column = 33, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Reset all")
 
         bt = Button(frame_toolbar,image=self.ico_help,command = self.help,width=25)
-        bt.grid(row = 0, column = 32, sticky="W")
+        bt.grid(row = 0, column = 34, sticky="W")
         bl = Balloon(self)
         bl.bind(bt,"Help")
 
@@ -265,6 +276,8 @@ class Refrapick(Tk):
         self.stNames = []
         self.originalTracesData = []
         self.originalTracesTimes = []
+        self.sts_original = None
+        self.isStacked = False
         self.filters = []
         self.receiverPositions = []
         self.picksArts = []
@@ -274,6 +287,9 @@ class Refrapick(Tk):
         self.velMode = False
         self.pickConnections = []
         self.velConnections = []
+        self.editMode = False
+        self._edit_cid = False
+        self.mutedTraces = []
         self.pickLineArts = []
         self.traceColor = "k"
         self.fillColor = "k"
@@ -288,6 +304,371 @@ class Refrapick(Tk):
         self.traveltimesColor = "g"
         self.traveltimesStyle = "--"
         self.pickSize = 100
+
+    def _traceXData(self, amp, shot, trace_index):
+
+        center = self.x1s[shot] + self.dxs[shot] * trace_index
+        amp = np.asarray(amp)
+
+        if amp.size == 0:
+            return amp
+
+        amax = np.max(np.abs(amp))
+
+        if amax == 0:
+            return np.zeros_like(amp) + center
+
+        return amp / amax * self.gains[shot] + center
+
+    def _clearWaveformData(self):
+
+        if self.pickMode:
+            self.pick()
+        if self.velMode:
+            self.appVelMode()
+        if self.editMode:
+            self.toggleEditMode()
+
+        for frame in self.frames:
+            frame.destroy()
+
+        self.frames = []
+        self.figs = []
+        self.axs = []
+        self.sts = []
+        self.xpicks = []
+        self.tpicks = []
+        self.sources = []
+        self.dxs = []
+        self.x1s = []
+        self.xends = []
+        self.tracesArts = []
+        self.fillArts = []
+        self.gains = []
+        self.tracesMaxs = []
+        self.tracesData = []
+        self.nchannels = []
+        self.tracesTime = []
+        self.fillSide = []
+        self.amplitudeClip = []
+        self.invertedTimeAxis = []
+        self.samplingRates = []
+        self.originalSamplingRates = []
+        self.stNames = []
+        self.originalTracesData = []
+        self.originalTracesTimes = []
+        self.filters = []
+        self.receiverPositions = []
+        self.picksArts = []
+        self.ttArts = []
+        self.pickConnections = []
+        self.velConnections = []
+        self.pickLineArts = []
+        self.mutedTraces = []
+        self.currentSt = 0
+
+    def _rebuildWaveformsFromState(self, state):
+
+        self._clearWaveformData()
+
+        for i, st in enumerate(state["sts"]):
+
+            dx = state["dxs"][i]
+            x1 = state["x1s"][i]
+            source = state["sources"][i]
+            xend = state["xends"][i]
+
+            frame = Frame(self)
+            frame.grid(row = 1, column = 0, sticky = "WE")
+            fig = plt.figure(figsize = (15.9,8.1))
+            canvas = FigureCanvasTkAgg(fig, frame)
+            canvas.draw()
+            toolbar = NavigationToolbar2Tk(canvas, frame)
+            toolbar.update()
+            canvas._tkcanvas.pack()
+            ax = fig.add_subplot(111)
+            fig.patch.set_facecolor('#F0F0F0')
+            ax.set_facecolor(self.backgroundColor)
+
+            self.frames.append(frame)
+            self.figs.append(fig)
+            self.axs.append(ax)
+            self.sts.append(st.copy())
+            self.stNames.append(state["stNames"][i])
+            self.dxs.append(dx)
+            self.sources.append(source)
+            self.x1s.append(x1)
+            self.xends.append(xend)
+            self.nchannels.append(state["nchannels"][i])
+            self.samplingRates.append(state["samplingRates"][i])
+            self.originalSamplingRates.append(state["originalSamplingRates"][i])
+            self.receiverPositions.append(list(state["receiverPositions"][i]))
+            self.filters.append(list(state["filters"][i]))
+
+            self.tracesArts.append([])
+            self.fillArts.append([])
+            self.tracesData.append([])
+            self.tracesTime.append([])
+            self.originalTracesData.append([])
+            self.originalTracesTimes.append([])
+            self.tracesMaxs.append([])
+            self.gains.append(1)
+            self.fillSide.append(0)
+            self.amplitudeClip.append(0)
+            self.invertedTimeAxis.append(1)
+            self.xpicks.append([])
+            self.tpicks.append([])
+            self.picksArts.append([])
+            self.pickLineArts.append(False)
+            self.pickConnections.append([False,False,False,False])
+            self.velConnections.append([False,False,False])
+            self.mutedTraces.append(list(state["mutedTraces"][i]))
+
+            for j in range(len(state["tracesData"][i])):
+
+                data = np.asarray(state["tracesData"][i][j]).copy()
+                times = np.asarray(state["tracesTime"][i][j]).copy()
+                data_orig = np.asarray(state["originalTracesData"][i][j]).copy()
+                time_orig = np.asarray(state["originalTracesTimes"][i][j]).copy()
+                line, = ax.plot(self._traceXData(data, i, j), times, c=self.traceColor, lw=.7)
+                self.tracesArts[i].append(line)
+                self.tracesData[i].append(data)
+                self.tracesTime[i].append(times)
+                self.originalTracesData[i].append(data_orig)
+                self.originalTracesTimes[i].append(time_orig)
+                self.tracesMaxs[i].append(np.max(np.abs(data_orig)))
+                self.sts[i][j].data = data.copy()
+                if self.mutedTraces[i][j]:
+                    self._applyMuteState(i, j)
+
+            ax.set_ylabel("TIME [s]")
+            ax.set_xlabel("RECEIVER POSITION [m]")
+            if self.grid:
+                ax.grid(lw = .5, alpha = .5, c = self.gridColor, ls = self.gridStyle)
+            ax.set_title("%s | dx = %.2f m | source = %.2f m | sampling = %d Hz | filters = no" % (self.stNames[i], dx, source, self.originalSamplingRates[i]))
+            ax.set_ylim(min(self.tracesTime[i][0]), max(self.tracesTime[i][0]))
+            ax.set_xlim(x1-dx/2, xend+dx/2)
+            ax.invert_yaxis()
+
+        if self.sts:
+            self.currentSt = 0
+            self.frames[0].tkraise()
+            self.statusLabel.lift()
+            self.statusLabel.configure(text="Waveform(s) ready!",font=("Arial", 11))
+            for fig in self.figs:
+                fig.canvas.draw()
+
+    def _buildCurrentStateSnapshot(self):
+
+        state = {
+            "sts": [st.copy() for st in self.sts],
+            "stNames": list(self.stNames),
+            "dxs": list(self.dxs),
+            "sources": list(self.sources),
+            "x1s": list(self.x1s),
+            "xends": list(self.xends),
+            "nchannels": list(self.nchannels),
+            "samplingRates": list(self.samplingRates),
+            "originalSamplingRates": list(self.originalSamplingRates),
+            "receiverPositions": [list(rp) for rp in self.receiverPositions],
+            "filters": [list(f) for f in self.filters],
+            "tracesData": [[np.asarray(tr).copy() for tr in shot] for shot in self.tracesData],
+            "tracesTime": [[np.asarray(tt).copy() for tt in shot] for shot in self.tracesTime],
+            "originalTracesData": [[np.asarray(tr).copy() for tr in shot] for shot in self.originalTracesData],
+            "originalTracesTimes": [[np.asarray(tt).copy() for tt in shot] for shot in self.originalTracesTimes],
+            "mutedTraces": [list(m) for m in self.mutedTraces],
+        }
+        return state
+
+    def _applyMuteState(self, shot, trace_index):
+
+        if self.mutedTraces[shot][trace_index]:
+            amp = np.zeros_like(self.originalTracesData[shot][trace_index])
+            tt = np.asarray(self.originalTracesTimes[shot][trace_index]).copy()
+            self.tracesData[shot][trace_index] = amp
+            self.tracesTime[shot][trace_index] = tt
+        else:
+            amp = np.asarray(self.originalTracesData[shot][trace_index]).copy()
+            tt = np.asarray(self.originalTracesTimes[shot][trace_index]).copy()
+            self.tracesData[shot][trace_index] = amp
+            self.tracesTime[shot][trace_index] = tt
+
+        self.sts[shot][trace_index].data = np.asarray(self.tracesData[shot][trace_index]).copy()
+        self.tracesArts[shot][trace_index].set_xdata(self._traceXData(self.tracesData[shot][trace_index], shot, trace_index))
+        self.tracesArts[shot][trace_index].set_ydata(self.tracesTime[shot][trace_index])
+
+    def _connectEditMode(self):
+
+        if not self.editMode or not self.sts:
+            return
+
+        if self._edit_cid:
+            self.figs[self.currentSt].canvas.mpl_disconnect(self._edit_cid)
+
+        self._edit_cid = self.figs[self.currentSt].canvas.mpl_connect('button_press_event', self._onEditClick)
+
+    def _disconnectEditMode(self):
+
+        if self._edit_cid and self.sts:
+            self.figs[self.currentSt].canvas.mpl_disconnect(self._edit_cid)
+        self._edit_cid = False
+
+    def _onEditClick(self, event):
+
+        if not self.editMode or not self.sts:
+            return
+        if event.inaxes != self.axs[self.currentSt]:
+            return
+        if event.xdata is None:
+            return
+
+        positions = np.asarray(self.receiverPositions[self.currentSt])
+
+        if positions.size == 0:
+            return
+
+        trace_index = int(np.argmin(np.abs(positions - event.xdata)))
+        self.mutedTraces[self.currentSt][trace_index] = not self.mutedTraces[self.currentSt][trace_index]
+        self._applyMuteState(self.currentSt, trace_index)
+
+        if self.fillSide[self.currentSt] == 1:
+            self.fillPositive()
+        elif self.fillSide[self.currentSt] == -1:
+            self.fillNegative()
+
+        if self.amplitudeClip[self.currentSt] == 1:
+            self.amplitudeClip[self.currentSt] = 0
+            self.clipAmplitudes()
+
+        self.figs[self.currentSt].canvas.draw()
+
+    def toggleEditMode(self):
+
+        if not self.sts:
+            return
+
+        if self.editMode == False:
+            if self.pickMode:
+                self.pick()
+            if self.velMode:
+                self.appVelMode()
+            self.editMode = True
+            self.bt_editMode.configure(relief="sunken")
+            self._connectEditMode()
+            self.statusLabel.configure(text="Edit mode enabled!",font=("Arial", 11))
+            messagebox.showinfo(title="Refrapick", message="Edit mode enabled: click on traces to mute/unmute.")
+        else:
+            self.editMode = False
+            self.bt_editMode.configure(relief="raised")
+            self._disconnectEditMode()
+            self.statusLabel.configure(text="Edit mode disabled!",font=("Arial", 11))
+            messagebox.showinfo(title="Refrapick", message="Edit mode disabled!")
+
+    def stackTraces(self):
+
+        if not self.sts:
+            return
+
+        nstack = simpledialog.askinteger("Refrapick", "Enter stack size (consecutive records):")
+
+        if nstack is None:
+            return
+        if nstack < 2:
+            messagebox.showerror("Refrapick", "Stack size must be an integer >= 2.")
+            return
+        if nstack > len(self.sts):
+            messagebox.showerror("Refrapick", "Stack size cannot be greater than the number of records.")
+            return
+
+        if self.sts_original is None:
+            self.sts_original = self._buildCurrentStateSnapshot()
+
+        stacked_state = {
+            "sts": [],
+            "stNames": [],
+            "dxs": [],
+            "sources": [],
+            "x1s": [],
+            "xends": [],
+            "nchannels": [],
+            "samplingRates": [],
+            "originalSamplingRates": [],
+            "receiverPositions": [],
+            "filters": [],
+            "tracesData": [],
+            "tracesTime": [],
+            "originalTracesData": [],
+            "originalTracesTimes": [],
+            "mutedTraces": [],
+        }
+
+        for g0 in range(0, len(self.sts), nstack):
+
+            gidx = list(range(g0, min(g0 + nstack, len(self.sts))))
+            ibase = gidx[0]
+            nch = self.nchannels[ibase]
+
+            for idx in gidx:
+                if self.nchannels[idx] != nch:
+                    messagebox.showerror("Refrapick", "All records in each stack group must have the same number of traces.")
+                    return
+
+            st_group = self.sts[ibase].copy()
+            traces_data_group = []
+            traces_time_group = []
+            traces_data_original_group = []
+            traces_time_original_group = []
+            muted_group = []
+
+            for j in range(nch):
+                valid_data = []
+                valid_time = []
+
+                for idx in gidx:
+                    if not self.mutedTraces[idx][j]:
+                        valid_data.append(np.asarray(self.tracesData[idx][j]))
+                        valid_time.append(np.asarray(self.tracesTime[idx][j]))
+
+                if valid_data:
+                    min_len = min(len(a) for a in valid_data)
+                    if min_len == 0:
+                        stacked_trace = np.zeros(0)
+                        stacked_time = np.zeros(0)
+                    else:
+                        stacked_trace = np.mean(np.vstack([a[:min_len] for a in valid_data]), axis=0)
+                        stacked_time = valid_time[0][:min_len]
+                    muted_group.append(False)
+                else:
+                    stacked_trace = np.zeros_like(np.asarray(self.originalTracesData[ibase][j]))
+                    stacked_time = np.asarray(self.originalTracesTimes[ibase][j]).copy()
+                    muted_group.append(True)
+
+                st_group[j].data = np.asarray(stacked_trace).copy()
+                traces_data_group.append(np.asarray(stacked_trace).copy())
+                traces_time_group.append(np.asarray(stacked_time).copy())
+                traces_data_original_group.append(np.asarray(stacked_trace).copy())
+                traces_time_original_group.append(np.asarray(stacked_time).copy())
+
+            stacked_state["sts"].append(st_group)
+            stacked_state["stNames"].append("Stack %d: %s" % (len(stacked_state["sts"]), self.stNames[ibase]))
+            stacked_state["dxs"].append(self.dxs[ibase])
+            stacked_state["sources"].append(self.sources[ibase])
+            stacked_state["x1s"].append(self.x1s[ibase])
+            stacked_state["xends"].append(self.xends[ibase])
+            stacked_state["nchannels"].append(nch)
+            stacked_state["samplingRates"].append(self.samplingRates[ibase])
+            stacked_state["originalSamplingRates"].append(self.originalSamplingRates[ibase])
+            stacked_state["receiverPositions"].append(list(self.receiverPositions[ibase]))
+            stacked_state["filters"].append([False, False])
+            stacked_state["tracesData"].append(traces_data_group)
+            stacked_state["tracesTime"].append(traces_time_group)
+            stacked_state["originalTracesData"].append(traces_data_original_group)
+            stacked_state["originalTracesTimes"].append(traces_time_original_group)
+            stacked_state["mutedTraces"].append(muted_group)
+
+        self._rebuildWaveformsFromState(stacked_state)
+        self.isStacked = True
+        messagebox.showinfo("Refrapick", "Stacking complete: %d record(s) available." % len(self.sts))
 
     def kill(self):
 
@@ -311,6 +692,7 @@ class Refrapick(Tk):
             
         self.frames[self.currentSt].tkraise()
         self.statusLabel.lift()
+        self._connectEditMode()
 
     def previousSection(self):
 
@@ -327,7 +709,8 @@ class Refrapick(Tk):
                     self.allPicks()
             
         self.frames[self.currentSt].tkraise()
-        self.statusLabel.lift()    
+        self.statusLabel.lift()
+        self._connectEditMode()
     
     def reset(self):
 
@@ -686,7 +1069,7 @@ class Refrapick(Tk):
                         for i in range(len(self.tracesArts[self.currentSt])):
 
                             a = self.tracesData[self.currentSt][i]
-                            self.tracesArts[self.currentSt][i].set_xdata(a/max(a)*self.gains[self.currentSt]+self.x1s[self.currentSt]+self.dxs[self.currentSt]*i)
+                            self.tracesArts[self.currentSt][i].set_xdata(self._traceXData(a, self.currentSt, i))
 
                         self.axs[self.currentSt].set_xlim(self.x1s[self.currentSt]-self.dxs[self.currentSt]/2, self.xends[self.currentSt]+self.dxs[self.currentSt]/2)
                         self.updatePlotTitle()
@@ -716,7 +1099,7 @@ class Refrapick(Tk):
                     for i in range(len(self.tracesArts[self.currentSt])):
 
                         a = self.tracesData[self.currentSt][i]
-                        self.tracesArts[self.currentSt][i].set_xdata(a/max(a)*self.gains[self.currentSt]+self.x1s[self.currentSt]+self.dxs[self.currentSt]*i)
+                        self.tracesArts[self.currentSt][i].set_xdata(self._traceXData(a, self.currentSt, i))
 
                     self.axs[self.currentSt].set_xlim(self.x1s[self.currentSt]-self.dxs[self.currentSt]/2, self.xends[self.currentSt]+self.dxs[self.currentSt]/2)
                     
@@ -839,8 +1222,9 @@ class Refrapick(Tk):
 
             if self.pickMode: self.pick()
             if self.velMode: self.appVelMode()
+            if self.editMode: self.toggleEditMode()
             
-            files = filedialog.askopenfilenames(title='Open', initialdir = self.projPath+"/data/", filetypes=[('SEG2 file', '*.dat'),
+            files = filedialog.askopenfilenames(title='Open', initialdir = self.projPath+"/data/", filetypes=[('SEG2 file', '*.dat,*.sg2,*.seg2'),
                                                                                                             ('SEGY file', '*.sgy'),
                                                                                                             ('SU file', '*.su')])
 
@@ -923,17 +1307,19 @@ class Refrapick(Tk):
                     self.invertedTimeAxis.append(1)
                     self.filters.append([False,False])
                     self.picksArts.append([])
+                    self.mutedTraces.append([False] * len(st))
                     
                     for j, tr in enumerate(st):
 
                         tr.data *= -1
                         self.tracesMaxs[i+n].append(max(tr.data))
-                        t, = ax.plot(tr.data/max(tr.data)+x1+dx*j, tr.times()+delay, c = self.traceColor, lw = .7)
+                        data = np.asarray(tr.data).copy()
+                        t, = ax.plot(self._traceXData(data, i+n, j), tr.times()+delay, c = self.traceColor, lw = .7)
                         self.tracesArts[i+n].append(t)
-                        self.tracesData[i+n].append(tr.data)
-                        self.tracesTime[i+n].append(tr.times()+delay)
-                        self.originalTracesData[i+n].append(tr.data)
-                        self.originalTracesTimes[i+n].append(tr.times()+delay)
+                        self.tracesData[i+n].append(data.copy())
+                        self.tracesTime[i+n].append(np.asarray(tr.times()+delay).copy())
+                        self.originalTracesData[i+n].append(data.copy())
+                        self.originalTracesTimes[i+n].append(np.asarray(tr.times()+delay).copy())
 
                         if st[0].stats._format == "SEG2": self.receiverPositions[i+n].append(float(tr.stats.seg2['RECEIVER_LOCATION']))
                         else: self.receiverPositions[i+n].append(x1+j*dx)
@@ -953,6 +1339,8 @@ class Refrapick(Tk):
                 self.statusLabel.lift()
                 self.statusLabel.configure(text="Waveform(s) ready!",font=("Arial", 11))
                 self.currentSt = 0
+                self.sts_original = None
+                self.isStacked = False
             
                 if n == 0: messagebox.showinfo('Refrapick','%d file(s) loaded succesfully!'%len(files))
                 else: messagebox.showinfo('Refrapick','%d new file(s) loaded succesfully!'%len(files))
@@ -1061,7 +1449,7 @@ E-mail: vjs279@hotmail.com
                         new_data, new_time = resample(tr, n, self.tracesTime[self.currentSt][i])
                         self.tracesData[self.currentSt][i] = new_data
                         self.tracesTime[self.currentSt][i] = new_time
-                        self.tracesArts[self.currentSt][i].set_xdata(new_data/max(new_data)*self.gains[self.currentSt]+self.x1s[self.currentSt]+self.dxs[self.currentSt]*i)
+                        self.tracesArts[self.currentSt][i].set_xdata(self._traceXData(new_data, self.currentSt, i))
                         self.tracesArts[self.currentSt][i].set_ydata(new_time)
 
                     self.samplingRates[self.currentSt] = newSamplingFreq
@@ -1088,7 +1476,7 @@ E-mail: vjs279@hotmail.com
                     self.tracesData[self.currentSt][i] = self.tracesData[self.currentSt][i][self.tracesTime[self.currentSt][i] <= maxTime]
                     self.tracesTime[self.currentSt][i] = self.tracesTime[self.currentSt][i][self.tracesTime[self.currentSt][i] <= maxTime]
 
-                    self.tracesArts[self.currentSt][i].set_xdata(self.tracesData[self.currentSt][i]/max(self.tracesData[self.currentSt][i])*self.gains[self.currentSt]+self.x1s[self.currentSt]+self.dxs[self.currentSt]*i)
+                    self.tracesArts[self.currentSt][i].set_xdata(self._traceXData(self.tracesData[self.currentSt][i], self.currentSt, i))
                     self.tracesArts[self.currentSt][i].set_ydata(self.tracesTime[self.currentSt][i])
 
                 self.axs[self.currentSt].set_ylim(min(self.tracesArts[self.currentSt][0].get_ydata()),
@@ -1122,7 +1510,7 @@ E-mail: vjs279@hotmail.com
                 for i, tr in enumerate(self.tracesArts[self.currentSt]):
 
                     amp = self.tracesData[self.currentSt][i]
-                    tr.set_xdata(amp/max(amp)*self.gains[self.currentSt]+self.x1s[self.currentSt]+self.dxs[self.currentSt]*i)
+                    tr.set_xdata(self._traceXData(amp, self.currentSt, i))
 
                 self.amplitudeClip[self.currentSt] = 0
 
@@ -1200,7 +1588,7 @@ E-mail: vjs279@hotmail.com
             
             for i in range(len(self.tracesArts[self.currentSt])):
                 
-                self.tracesArts[self.currentSt][i].set_xdata(self.tracesData[self.currentSt][i]/max(self.tracesData[self.currentSt][i])*self.gains[self.currentSt]+self.x1s[self.currentSt]+self.dxs[self.currentSt]*i)
+                self.tracesArts[self.currentSt][i].set_xdata(self._traceXData(self.tracesData[self.currentSt][i], self.currentSt, i))
 
             self.figs[self.currentSt].canvas.draw()
             
@@ -1217,7 +1605,7 @@ E-mail: vjs279@hotmail.com
 
             for i in range(len(self.tracesArts[self.currentSt])):
 
-                self.tracesArts[self.currentSt][i].set_xdata(self.tracesData[self.currentSt][i]/max(self.tracesData[self.currentSt][i])*self.gains[self.currentSt]+self.x1s[self.currentSt]+self.dxs[self.currentSt]*i)
+                self.tracesArts[self.currentSt][i].set_xdata(self._traceXData(self.tracesData[self.currentSt][i], self.currentSt, i))
 
             self.figs[self.currentSt].canvas.draw()
             
@@ -1296,7 +1684,7 @@ E-mail: vjs279@hotmail.com
                 for i, tr in enumerate(self.tracesArts[self.currentSt]):
 
                         amp = self.tracesData[self.currentSt][i]
-                        tr.set_xdata(amp/max(amp)*self.gains[self.currentSt]+self.x1s[self.currentSt]+self.dxs[self.currentSt]*i)
+                        tr.set_xdata(self._traceXData(amp, self.currentSt, i))
 
                 if self.fillSide[self.currentSt] == 1: self.fillPositive()
                 elif self.fillSide[self.currentSt] == -1: self.fillNegative()
@@ -1309,17 +1697,28 @@ E-mail: vjs279@hotmail.com
 
         if self.sts:
 
+            if self.isStacked and self.sts_original is not None:
+                if messagebox.askyesno("Refrapick", "Restore original unstacked records?"):
+                    self._rebuildWaveformsFromState(self.sts_original)
+                    self.isStacked = False
+                    self.sts_original = None
+                    messagebox.showinfo("Refrapick", "Original records restored.")
+                return
+
             if messagebox.askyesno("Refrapick", "Restore default traces in %s?"%self.stNames[self.currentSt]):
 
                 self.gains[self.currentSt] = 1
+                self.mutedTraces[self.currentSt] = [False] * len(self.mutedTraces[self.currentSt])
                 
                 for i, tr in enumerate(self.tracesArts[self.currentSt]):
 
-                    amp = self.originalTracesData[self.currentSt][i]
-                    tr.set_xdata(amp/max(amp)*self.gains[self.currentSt]+self.x1s[self.currentSt]+self.dxs[self.currentSt]*i)
-                    tr.set_ydata(self.originalTracesTimes[self.currentSt][i])
+                    amp = np.asarray(self.originalTracesData[self.currentSt][i]).copy()
+                    t = np.asarray(self.originalTracesTimes[self.currentSt][i]).copy()
+                    tr.set_xdata(self._traceXData(amp, self.currentSt, i))
+                    tr.set_ydata(t)
                     self.tracesData[self.currentSt][i] = amp
-                    self.tracesTime[self.currentSt][i] = self.originalTracesTimes[self.currentSt][i]
+                    self.tracesTime[self.currentSt][i] = t
+                    self.sts[self.currentSt][i].data = amp.copy()
 
                 self.filters[self.currentSt][0] = False
                 self.filters[self.currentSt][1] = False
@@ -1348,6 +1747,8 @@ E-mail: vjs279@hotmail.com
 
             if self.pickMode == False:
 
+                if self.editMode:
+                    self.toggleEditMode()
                 if self.velMode: self.appVelMode()
 
                 self.statusLabel.configure(text="Pick mode enabled!",font=("Arial", 11))
@@ -1759,6 +2160,7 @@ E-mail: vjs279@hotmail.com
             if self.velMode == False:
 
                 if self.pickMode: self.pick()
+                if self.editMode: self.toggleEditMode()
 
                 self.statusLabel.configure(text="Apparent velocity mode enabled!",font=("Arial", 11))
                 messagebox.showinfo(title="Refrapick", message="Apparent velocity mode enabled")

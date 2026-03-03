@@ -8,6 +8,7 @@ from matplotlib.path import Path
 from matplotlib.patches import PathPatch
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.lines import Line2D
+from matplotlib.collections import LineCollection
 from matplotlib.colors import is_color_like
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -273,11 +274,15 @@ E-mail: vjs279@hotmail.com
         self.showMerged = False
         self.z2elev = False
         self.hideOutsideCoverage = True
-        self.maskBelowCoverageArc = True
+        self.maskBelowCoverageArc = False
+        self.maskBelowRayArc = self.maskBelowCoverageArc
         self.coverageArcBuffer = None
-        self.coverageArcSmoothing = 21
+        self.coverageArcSmoothing = 9
+        self.showCoverageArcDebug = True
         self.coverageVector = None
         self.tomoContourSettings = None
+        self._arcLine = None
+        self._limitLine = None
         self.canvas_data = None
         self.canvas_timeterms = None
         self.canvas_tomography = None
@@ -920,6 +925,19 @@ E-mail: vjs279@hotmail.com
     
     def clearTomoPlot(self):
 
+        self._safe_remove(getattr(self, "_arcLine", None))
+        self._safe_remove(getattr(self, "_limitLine", None))
+        self._arcLine = None
+        self._limitLine = None
+
+        # Remove colorbar axes appended in previous renders.
+        for fig_ax in list(self.fig_tomography.axes):
+            if fig_ax is not self.ax_tomography:
+                try:
+                    self.fig_tomography.delaxes(fig_ax)
+                except Exception:
+                    pass
+
         self.ax_tomography.cla()
         self.fig_tomography.patch.set_facecolor('#F0F0F0')
         self.ax_tomography.set_title("Tomography velocity model")
@@ -1038,6 +1056,25 @@ E-mail: vjs279@hotmail.com
                 obj.set_visible(False)
             except Exception:
                 pass
+    def _depth_down_sign(self, z_values):
+        """
+        Returns +1 if 'down' means larger z, -1 if 'down' means smaller z.
+        For your case (0, -10, -20...), this returns -1.
+        """
+        z = np.asarray(z_values, dtype=float)
+        z = z[np.isfinite(z)]
+        if z.size < 2:
+            return 1.0
+
+        zmin, zmax = float(np.min(z)), float(np.max(z))
+
+        # If the range is mostly <= 0 and includes 0-ish at the top, assume negative-down depth.
+        # Typical: zmax ~ 0, zmin negative.
+        if zmax <= 1e-9 and zmin < -1e-6:
+            return -1.0
+
+        # Otherwise assume positive-down (0..+depth) style
+        return 1.0
 
     def _getTomographyModelForDisplay(self):
 
@@ -1053,81 +1090,123 @@ E-mail: vjs279@hotmail.com
             if self.coverageVector is not None and len(self.coverageVector) == len(model):
                 modelMasked = model.copy()
                 modelMasked[np.asarray(self.coverageVector) == 0] = np.nan
-
-                if self.maskBelowCoverageArc:
-                    arc = self._computeCoverageArc()
-                    if arc is not None:
-                        x_arc, z_arc = arc
-                        cc = np.asarray(self.mgr.paraDomain.cellCenters())
-                        x_cell = cc[:,0]
-                        z_cell = cc[:,1]
-                        if self.coverageArcBuffer is None:
-                            if hasattr(self, "dx") and self.dx and self.dx > 0:
-                                buffer = 2.0 * float(self.dx)
-                            else:
-                                buffer = 1.0
-                        else:
-                            buffer = float(self.coverageArcBuffer)
-                        down = 1.0 if not self.z2elev else -1.0
-                        z_limit = np.interp(x_cell, x_arc, z_arc, left=z_arc[0], right=z_arc[-1]) + down * buffer
-                        deeper = ((z_cell - z_limit) * down) > 0.0
-                        modelMasked[deeper] = np.nan
-
                 return modelMasked
 
         return model
 
-    def _computeCoverageArc(self, nx=200):
+    def _computeRayPathCoverageArc(self, nx=200, samples_per_segment=10):
 
-        if self.mgr is None or self.coverageVector is None:
+        if self.mgr is None:
             return None
 
-        cov = np.asarray(self.coverageVector)
-        cc = np.asarray(self.mgr.paraDomain.cellCenters())
-        if cc.ndim != 2 or cc.shape[1] < 2:
-            return None
-        if len(cov) != cc.shape[0]:
-            return None
+        segments = []
+        fig_tmp = None
+        try:
+            fig_tmp = plt.figure()
+            ax_tmp = fig_tmp.add_subplot(111)
+            draw_ret = self.mgr.drawRayPaths(ax_tmp, color="k")
 
-        x = cc[:,0]
-        z = cc[:,1]
-        covered = (cov != 0)
-        if not np.any(covered):
+            def _collect_segments(obj):
+                if obj is None:
+                    return
+                if isinstance(obj, LineCollection):
+                    for seg in obj.get_segments():
+                        segments.append(np.asarray(seg, dtype=float))
+                    return
+                if isinstance(obj, (list, tuple)):
+                    for item in obj:
+                        _collect_segments(item)
+                    return
+                if hasattr(obj, "collections"):
+                    for col in obj.collections:
+                        _collect_segments(col)
+
+            _collect_segments(draw_ret)
+            for col in ax_tmp.collections:
+                if isinstance(col, LineCollection):
+                    _collect_segments(col)
+        except Exception:
+            segments = []
+        finally:
+            if fig_tmp is not None:
+                plt.close(fig_tmp)
+
+        def _collect_polyline_obj(obj, out_list):
+            if obj is None:
+                return
+            if isinstance(obj, np.ndarray):
+                arr = np.asarray(obj, dtype=float)
+                if arr.ndim == 2 and arr.shape[1] >= 2 and arr.shape[0] >= 2:
+                    out_list.append(arr[:, :2])
+                return
+            if isinstance(obj, (list, tuple)):
+                for item in obj:
+                    _collect_polyline_obj(item, out_list)
+
+        clean_segments = []
+        for seg in segments:
+            _collect_polyline_obj(seg, clean_segments)
+
+        if not clean_segments:
+            for holder in [getattr(self.mgr, "inv", None), getattr(self.mgr, "fop", None), self.mgr]:
+                for attr in ["rayPaths", "rayPath", "rays", "paths"]:
+                    _collect_polyline_obj(getattr(holder, attr, None), clean_segments)
+
+        if not clean_segments:
+            self._lastRayArcStats = {"segments": 0, "bins_populated": 0}
             return None
 
         try:
             xmin = min(min(self.sx), min(self.gx))
             xmax = max(max(self.sx), max(self.gx))
         except Exception:
-            xmin = float(np.nanmin(x))
-            xmax = float(np.nanmax(x))
+            all_x = np.concatenate([seg[:, 0] for seg in clean_segments])
+            xmin = float(np.nanmin(all_x))
+            xmax = float(np.nanmax(all_x))
 
         xbins = np.linspace(xmin, xmax, nx)
         if len(xbins) < 2:
             return None
 
-        xcov = x[covered]
-        zcov = z[covered]
-        idx = np.digitize(xcov, xbins) - 1
-        idx = np.clip(idx, 0, len(xbins)-1)
-
         z_arc = np.full(len(xbins), np.nan)
-        for i in range(len(xbins)):
-            inb = idx == i
-            if np.any(inb):
-                if not self.z2elev:
-                    z_arc[i] = np.max(zcov[inb])
-                else:
-                    z_arc[i] = np.min(zcov[inb])
+        all_z = np.concatenate([seg[:, 1] for seg in clean_segments])
+        down = self._depth_down_sign(all_z)
+        if self.z2elev:
+            down = -1.0
+        nseg = max(2, int(samples_per_segment))
+
+        for seg in clean_segments:
+            for p0, p1 in zip(seg[:-1], seg[1:]):
+                x0, z0 = float(p0[0]), float(p0[1])
+                x1, z1 = float(p1[0]), float(p1[1])
+                if not np.isfinite(x0) or not np.isfinite(z0) or not np.isfinite(x1) or not np.isfinite(z1):
+                    continue
+                ts = np.linspace(0.0, 1.0, nseg)
+                xs = x0 + (x1 - x0) * ts
+                zs = z0 + (z1 - z0) * ts
+                idx = np.digitize(xs, xbins) - 1
+                idx = np.clip(idx, 0, len(xbins) - 1)
+                for bi, z_sample in zip(idx, zs):
+                    if not np.isfinite(z_sample):
+                        continue
+                    if np.isnan(z_arc[bi]):
+                        z_arc[bi] = z_sample
+                    else:
+                        if down > 0:
+                            z_arc[bi] = max(z_arc[bi], z_sample)
+                        else:
+                            z_arc[bi] = min(z_arc[bi], z_sample)
 
         valid = np.isfinite(z_arc)
+        bins_populated = int(np.count_nonzero(valid))
+        self._lastRayArcStats = {"segments": len(clean_segments), "bins_populated": bins_populated}
         if not np.any(valid):
             return None
 
         vi = np.flatnonzero(valid)
         z_arc = np.interp(np.arange(len(z_arc)), vi, z_arc[valid], left=z_arc[valid][0], right=z_arc[valid][-1])
 
-        w = int(self.coverageArcSmoothing)
+        w = int(getattr(self, "coverageArcSmoothing", 9) or 9)
         if w < 1:
             w = 1
         if w % 2 == 0:
@@ -1162,6 +1241,34 @@ E-mail: vjs279@hotmail.com
         y_grid = linspace(min(z), max(z), ny)
         xi,zi = meshgrid(x_grid,y_grid)
         vi = griddata((x, z), v,(xi,zi), method = 'linear', fill_value=np.nan)
+
+        x_arc = None
+        z_arc = None
+        z_limit = None
+        nan_before = int(np.count_nonzero(~np.isfinite(vi)))
+        mask_below_arc = bool(getattr(self, "maskBelowRayArc", getattr(self, "maskBelowCoverageArc", False)))
+        if mask_below_arc:
+            arc = self._computeRayPathCoverageArc(nx=max(100, min(int(nx), 600)))
+            if arc is not None:
+                x_arc, z_arc = arc
+                if self.coverageArcBuffer is None:
+                    if hasattr(self, "dx") and self.dx and self.dx > 0:
+                        buffer = 2.0 * float(self.dx)
+                    else:
+                        buffer = 1.0
+                else:
+                    buffer = float(self.coverageArcBuffer)
+                z_arc_i = np.interp(xi[0, :], x_arc, z_arc, left=z_arc[0], right=z_arc[-1])
+                # For this project, depth is negative downward: deeper == smaller z.
+                z_limit = z_arc_i[None, :] - buffer
+                mask_deeper = zi < z_limit
+                vi[mask_deeper] = np.nan
+        nan_after = int(np.count_nonzero(~np.isfinite(vi)))
+        stats = getattr(self, "_lastRayArcStats", {"segments": 0, "bins_populated": 0})
+        print("ray-arc mask sanity:",
+              "segments=", int(stats.get("segments", 0)),
+              "bins_populated=", int(stats.get("bins_populated", 0)),
+              "nan_added=", int(nan_after - nan_before))
 
         cm = self.ax_tomography.contourf(xi, zi, np.ma.masked_invalid(vi), levels=nlevels, cmap=self.colormap,
                                          extend="both", vmin=self.minVelLimit, vmax=self.maxVelLimit)
@@ -1200,6 +1307,14 @@ E-mail: vjs279@hotmail.com
         self.zbln = zblank
 
         self.ax_tomography.plot(self.topographyx, self.topographyz, c= "k", lw = 1.5)
+        self._safe_remove(getattr(self, "_arcLine", None))
+        self._safe_remove(getattr(self, "_limitLine", None))
+        self._arcLine = None
+        self._limitLine = None
+        if mask_below_arc and getattr(self, "showCoverageArcDebug", False) and x_arc is not None and z_arc is not None and z_limit is not None:
+            z_arc_plot = np.interp(xi[0, :], x_arc, z_arc, left=z_arc[0], right=z_arc[-1])
+            self._arcLine, = self.ax_tomography.plot(xi[0, :], z_arc_plot, "k--", lw=1.0, zorder=200)
+            self._limitLine, = self.ax_tomography.plot(xi[0, :], z_limit[0, :], "r--", lw=1.0, zorder=200)
         
         limits = [(i,j) for i,j in zip(xblank,zblank)]
         
@@ -1762,6 +1877,14 @@ E-mail: vjs279@hotmail.com
     
     def plotOptions(self):
 
+        def _replotTomographyFromOptions():
+            if self.tomoContourSettings is not None:
+                self.clearTomoPlot()
+                nx, ny, nlevels = self.tomoContourSettings
+                self._plotTomographyContourModel(nx, ny, nlevels)
+            elif hasattr(self, "fig_tomography"):
+                self.fig_tomography.canvas.draw()
+
         def rayPath():
             
             if self.showRayPath == False:
@@ -2059,42 +2182,85 @@ E-mail: vjs279@hotmail.com
 
         def toggleArcMask():
 
-            self.maskBelowCoverageArc = not self.maskBelowCoverageArc
+            if not self.tomoPlot or self.mgr is None:
+                messagebox.showerror(title="Refrainv", message="Run tomography inversion first.")
+                plotOptionsWindow.tkraise()
+                return
 
-            if self.tomoPlot and self.tomoContourSettings is not None:
-                self.clearTomoPlot()
-                nx, ny, nlevels = self.tomoContourSettings
-                self._plotTomographyContourModel(nx, ny, nlevels)
+            self.maskBelowCoverageArc = not bool(getattr(self, "maskBelowCoverageArc", False))
+            self.maskBelowRayArc = self.maskBelowCoverageArc
+            _replotTomographyFromOptions()
 
             if self.maskBelowCoverageArc:
-                messagebox.showinfo(title="Refrainv", message="Arc masking below coverage enabled.")
+                messagebox.showinfo(title="Refrainv", message="Mask below ray coverage arc enabled.")
             else:
-                messagebox.showinfo(title="Refrainv", message="Arc masking below coverage disabled.")
+                messagebox.showinfo(title="Refrainv", message="Mask below ray coverage arc disabled.")
             plotOptionsWindow.tkraise()
 
         def setArcMaskBuffer():
 
+            if not self.tomoPlot or self.mgr is None:
+                messagebox.showerror(title="Refrainv", message="Run tomography inversion first.")
+                plotOptionsWindow.tkraise()
+                return
+
             new_buffer = simpledialog.askfloat("Refrainv", "Enter arc masking buffer in meters (cancel for auto):")
             if new_buffer is None:
-                self.coverageArcBuffer = None
-            else:
-                self.coverageArcBuffer = float(new_buffer)
+                plotOptionsWindow.tkraise()
+                return
 
-            if self.tomoPlot and self.tomoContourSettings is not None:
-                self.clearTomoPlot()
-                nx, ny, nlevels = self.tomoContourSettings
-                self._plotTomographyContourModel(nx, ny, nlevels)
+            self.coverageArcBuffer = float(new_buffer)
 
-            if self.coverageArcBuffer is None:
-                messagebox.showinfo(title="Refrainv", message="Arc masking buffer set to automatic.")
+            if bool(getattr(self, "maskBelowRayArc", getattr(self, "maskBelowCoverageArc", False))):
+                _replotTomographyFromOptions()
+
+            messagebox.showinfo(title="Refrainv", message="Ray arc buffer set to %.2f m."%self.coverageArcBuffer)
+            plotOptionsWindow.tkraise()
+
+        def setArcMaskSmoothing():
+
+            if not self.tomoPlot or self.mgr is None:
+                messagebox.showerror(title="Refrainv", message="Run tomography inversion first.")
+                plotOptionsWindow.tkraise()
+                return
+
+            new_smooth = simpledialog.askinteger("Refrainv", "Enter ray arc smoothing window (odd integer >= 1):")
+            if new_smooth is None:
+                plotOptionsWindow.tkraise()
+                return
+
+            if new_smooth < 1:
+                new_smooth = 1
+            if new_smooth % 2 == 0:
+                new_smooth += 1
+            self.coverageArcSmoothing = int(new_smooth)
+
+            if bool(getattr(self, "maskBelowRayArc", getattr(self, "maskBelowCoverageArc", False))):
+                _replotTomographyFromOptions()
+
+            messagebox.showinfo(title="Refrainv", message="Ray arc smoothing set to %d."%self.coverageArcSmoothing)
+            plotOptionsWindow.tkraise()
+
+        def toggleArcMaskDebug():
+
+            if not self.tomoPlot or self.mgr is None:
+                messagebox.showerror(title="Refrainv", message="Run tomography inversion first.")
+                plotOptionsWindow.tkraise()
+                return
+
+            self.showCoverageArcDebug = not bool(getattr(self, "showCoverageArcDebug", False))
+            _replotTomographyFromOptions()
+
+            if self.showCoverageArcDebug:
+                messagebox.showinfo(title="Refrainv", message="Ray arc debug dashed lines enabled.")
             else:
-                messagebox.showinfo(title="Refrainv", message="Arc masking buffer set to %.2f m."%self.coverageArcBuffer)
+                messagebox.showinfo(title="Refrainv", message="Ray arc debug dashed lines disabled.")
             plotOptionsWindow.tkraise()
         
         plotOptionsWindow = Toplevel(self)
         plotOptionsWindow.title('Refrainv - Plot options')
         plotOptionsWindow.configure(bg = "#F0F0F0")
-        plotOptionsWindow.geometry("350x600")
+        plotOptionsWindow.geometry("350x680")
         plotOptionsWindow.resizable(0,0)
         plotOptionsWindow.iconbitmap("%s/images/ico_refrapy.ico"%getcwd())
         Label(plotOptionsWindow, text = "Plot options",font=("Arial", 11)).grid(row=0,column=0,sticky="EW",pady=5,padx=65)
@@ -2109,8 +2275,10 @@ E-mail: vjs279@hotmail.com
         Button(plotOptionsWindow,text="Show/hide grid lines", command = gridLines, width = 30).grid(row = 9, column = 0,pady=5,padx=65)
         Button(plotOptionsWindow,text="Change traveltimes line color", command = dataLinesColor, width = 30).grid(row = 10, column = 0,pady=5,padx=65)
         Button(plotOptionsWindow,text="Show/hide areas outside ray coverage", command = hideOutsideCoverage, width = 30).grid(row = 11, column = 0,pady=5,padx=65)
-        Button(plotOptionsWindow,text="Toggle arc masking below coverage", command = toggleArcMask, width = 30).grid(row = 12, column = 0,pady=5,padx=65)
-        Button(plotOptionsWindow,text="Set arc masking buffer (m)", command = setArcMaskBuffer, width = 30).grid(row = 13, column = 0,pady=5,padx=65)
+        Button(plotOptionsWindow,text="Toggle mask below ray coverage arc", command = toggleArcMask, width = 30).grid(row = 12, column = 0,pady=5,padx=65)
+        Button(plotOptionsWindow,text="Set ray arc buffer (m)", command = setArcMaskBuffer, width = 30).grid(row = 13, column = 0,pady=5,padx=65)
+        Button(plotOptionsWindow,text="Set ray arc smoothing (odd window)", command = setArcMaskSmoothing, width = 30).grid(row = 14, column = 0,pady=5,padx=65)
+        Button(plotOptionsWindow,text="Toggle mask debug dashed lines", command = toggleArcMaskDebug, width = 30).grid(row = 15, column = 0,pady=5,padx=65)
         
         plotOptionsWindow.tkraise()
         

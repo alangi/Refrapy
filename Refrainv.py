@@ -11,7 +11,7 @@ from matplotlib.lines import Line2D
 from matplotlib.colors import is_color_like
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from tkinter import Tk, Toplevel, Frame, Button, Label, filedialog, messagebox, PhotoImage, simpledialog, Entry
+from tkinter import Tk, Toplevel, Frame, Button, Label, filedialog, messagebox, PhotoImage, simpledialog, Entry, TclError
 from os import path, makedirs, getcwd
 from obspy import read
 from obspy.signal.filter import lowpass, highpass
@@ -192,10 +192,25 @@ E-mail: vjs279@hotmail.com
 
         if messagebox.askyesno("Refrainv", "Clear all?"):
 
-            self.frame_plots.destroy()
-            self.frame_data.destroy()
-            self.frame_timeterms.destroy()
-            self.frame_tomography.destroy()
+            if hasattr(self, "fig_data"):
+                try:
+                    if hasattr(self, "timeterms_pickEvent"):
+                        self.fig_data.canvas.mpl_disconnect(self.timeterms_pickEvent)
+                    if hasattr(self, "timeterms_keyEvent"):
+                        self.fig_data.canvas.mpl_disconnect(self.timeterms_keyEvent)
+                except Exception:
+                    pass
+
+            self._safe_destroy_widget(getattr(self, "toolbar_data", None))
+            self._safe_destroy_widget(getattr(self, "toolbar_timeterms", None))
+            self._safe_destroy_widget(getattr(self, "toolbar_tomography", None))
+            self._safe_destroy_widget(getattr(self, "canvas_data", None))
+            self._safe_destroy_widget(getattr(self, "canvas_timeterms", None))
+            self._safe_destroy_widget(getattr(self, "canvas_tomography", None))
+            self._safe_destroy_widget(getattr(self, "frame_data", None))
+            self._safe_destroy_widget(getattr(self, "frame_timeterms", None))
+            self._safe_destroy_widget(getattr(self, "frame_tomography", None))
+            self._safe_destroy_widget(getattr(self, "frame_plots", None))
             self.initiateVariables()
             self.statusLabel.configure(text="Create or load a project to start",font=("Arial", 11))
             messagebox.showinfo(title="Refrainv", message="All cleared successfully!")
@@ -249,8 +264,17 @@ E-mail: vjs279@hotmail.com
         self.showMerged = False
         self.z2elev = False
         self.hideOutsideCoverage = True
+        self.maskBelowCoverageArc = True
+        self.coverageArcBuffer = None
+        self.coverageArcSmoothing = 21
         self.coverageVector = None
         self.tomoContourSettings = None
+        self.canvas_data = None
+        self.canvas_timeterms = None
+        self.canvas_tomography = None
+        self.toolbar_data = None
+        self.toolbar_timeterms = None
+        self.toolbar_tomography = None
     
     def kill(self):
 
@@ -329,11 +353,11 @@ E-mail: vjs279@hotmail.com
         self.frame_data = Frame(self.frame_plots)
         self.frame_data.grid(row = 0, column = 0, sticky = "W", rowspan = 2)
         self.fig_data = plt.figure(figsize = (6,8.1))
-        canvas_data = FigureCanvasTkAgg(self.fig_data, self.frame_data)
-        canvas_data.draw()
-        toolbar_data = NavigationToolbar2Tk(canvas_data, self.frame_data)
-        toolbar_data.update()
-        canvas_data._tkcanvas.pack()
+        self.canvas_data = FigureCanvasTkAgg(self.fig_data, self.frame_data)
+        self.canvas_data.draw()
+        self.toolbar_data = NavigationToolbar2Tk(self.canvas_data, self.frame_data)
+        self.toolbar_data.update()
+        self.canvas_data._tkcanvas.pack()
         self.ax_data = self.fig_data.add_subplot(111)
         self.fig_data.patch.set_facecolor('#F0F0F0')
         self.ax_data.set_title("Observed data")
@@ -350,11 +374,11 @@ E-mail: vjs279@hotmail.com
         self.frame_timeterms = Frame(self.frame_plots)
         self.frame_timeterms.grid(row = 0, column = 1, sticky = "NSWE")
         self.fig_timeterms = plt.figure(figsize = (9.5,3.7))
-        canvas_timeterms = FigureCanvasTkAgg(self.fig_timeterms, self.frame_timeterms)
-        canvas_timeterms.draw()
-        toolbar_timeterms = NavigationToolbar2Tk(canvas_timeterms, self.frame_timeterms)
-        toolbar_timeterms.update()
-        canvas_timeterms._tkcanvas.pack()
+        self.canvas_timeterms = FigureCanvasTkAgg(self.fig_timeterms, self.frame_timeterms)
+        self.canvas_timeterms.draw()
+        self.toolbar_timeterms = NavigationToolbar2Tk(self.canvas_timeterms, self.frame_timeterms)
+        self.toolbar_timeterms.update()
+        self.canvas_timeterms._tkcanvas.pack()
         self.ax_timeterms = self.fig_timeterms.add_subplot(111)
         self.fig_timeterms.patch.set_facecolor('#F0F0F0')
         self.ax_timeterms.set_title("Time-terms velocity model")
@@ -373,11 +397,11 @@ E-mail: vjs279@hotmail.com
         self.frame_tomography = Frame(self.frame_plots)
         self.frame_tomography.grid(row = 1, column = 1, sticky = "NSWE")
         self.fig_tomography = plt.figure(figsize = (9.5,3.7))
-        canvas_tomography = FigureCanvasTkAgg(self.fig_tomography, self.frame_tomography)
-        canvas_tomography.draw()
-        toolbar_tomography = NavigationToolbar2Tk(canvas_tomography, self.frame_tomography)
-        toolbar_tomography.update()
-        canvas_tomography._tkcanvas.pack()
+        self.canvas_tomography = FigureCanvasTkAgg(self.fig_tomography, self.frame_tomography)
+        self.canvas_tomography.draw()
+        self.toolbar_tomography = NavigationToolbar2Tk(self.canvas_tomography, self.frame_tomography)
+        self.toolbar_tomography.update()
+        self.canvas_tomography._tkcanvas.pack()
         self.ax_tomography = self.fig_tomography.add_subplot(111)
         self.fig_tomography.patch.set_facecolor('#F0F0F0')
         self.ax_tomography.set_title("Tomography velocity model")
@@ -481,7 +505,14 @@ E-mail: vjs279@hotmail.com
                         self.gz = gz
                         self.sgx = sgx
                         self.sgz = sgz
-                        self.dx = self.gx[1]-self.gx[0]
+                        gx_unique = sorted(set(gx))
+                        if len(gx_unique) >= 2:
+                            self.dx = float(gx_unique[1] - gx_unique[0])
+                        else:
+                            dxtmp = simpledialog.askfloat("Refrainv", "Enter receiver spacing (dx) in meters:")
+                            if dxtmp is None or dxtmp <= 0:
+                                dxtmp = 1.0
+                            self.dx = float(dxtmp)
                         self.sx, self.sz = [], []
                         
                         for i in list(set(s)):
@@ -906,8 +937,7 @@ E-mail: vjs279@hotmail.com
 
     def clearTimeTermsPlot(self):
 
-        self.fig_timeterms.clf()
-        self.ax_timeterms = self.fig_timeterms.add_subplot(111)
+        self.ax_timeterms.cla()
         self.fig_timeterms.patch.set_facecolor('#F0F0F0')
         self.ax_timeterms.set_title("Time-terms velocity model")
         self.ax_timeterms.set_xlabel("POSITION [m]")
@@ -935,6 +965,29 @@ E-mail: vjs279@hotmail.com
         self.ax_timeterms.xaxis.set_ticks_position('bottom')
         self.timetermsPlot = False
         self.fig_timeterms.canvas.draw()
+
+    def _safe_destroy_widget(self, widget):
+
+        if widget is None:
+            return
+
+        try:
+            if hasattr(widget, "winfo_exists") and widget.winfo_exists():
+                widget.destroy()
+            elif hasattr(widget, "get_tk_widget"):
+                tk_widget = widget.get_tk_widget()
+                if tk_widget.winfo_exists():
+                    tk_widget.destroy()
+            elif hasattr(widget, "_tkcanvas"):
+                tk_widget = widget._tkcanvas
+                if tk_widget.winfo_exists():
+                    tk_widget.destroy()
+            elif hasattr(widget, "destroy"):
+                widget.destroy()
+        except TclError:
+            pass
+        except Exception:
+            pass
 
     def _safe_remove(self, obj):
 
@@ -973,9 +1026,92 @@ E-mail: vjs279@hotmail.com
             if self.coverageVector is not None and len(self.coverageVector) == len(model):
                 modelMasked = model.copy()
                 modelMasked[np.asarray(self.coverageVector) == 0] = np.nan
+
+                if self.maskBelowCoverageArc:
+                    arc = self._computeCoverageArc()
+                    if arc is not None:
+                        x_arc, z_arc = arc
+                        cc = np.asarray(self.mgr.paraDomain.cellCenters())
+                        x_cell = cc[:,0]
+                        z_cell = cc[:,1]
+                        if self.coverageArcBuffer is None:
+                            if hasattr(self, "dx") and self.dx and self.dx > 0:
+                                buffer = 2.0 * float(self.dx)
+                            else:
+                                buffer = 1.0
+                        else:
+                            buffer = float(self.coverageArcBuffer)
+                        down = 1.0 if not self.z2elev else -1.0
+                        z_limit = np.interp(x_cell, x_arc, z_arc, left=z_arc[0], right=z_arc[-1]) + down * buffer
+                        deeper = ((z_cell - z_limit) * down) > 0.0
+                        modelMasked[deeper] = np.nan
+
                 return modelMasked
 
         return model
+
+    def _computeCoverageArc(self, nx=200):
+
+        if self.mgr is None or self.coverageVector is None:
+            return None
+
+        cov = np.asarray(self.coverageVector)
+        cc = np.asarray(self.mgr.paraDomain.cellCenters())
+        if cc.ndim != 2 or cc.shape[1] < 2:
+            return None
+        if len(cov) != cc.shape[0]:
+            return None
+
+        x = cc[:,0]
+        z = cc[:,1]
+        covered = (cov != 0)
+        if not np.any(covered):
+            return None
+
+        try:
+            xmin = min(min(self.sx), min(self.gx))
+            xmax = max(max(self.sx), max(self.gx))
+        except Exception:
+            xmin = float(np.nanmin(x))
+            xmax = float(np.nanmax(x))
+
+        xbins = np.linspace(xmin, xmax, nx)
+        if len(xbins) < 2:
+            return None
+
+        xcov = x[covered]
+        zcov = z[covered]
+        idx = np.digitize(xcov, xbins) - 1
+        idx = np.clip(idx, 0, len(xbins)-1)
+
+        z_arc = np.full(len(xbins), np.nan)
+        for i in range(len(xbins)):
+            inb = idx == i
+            if np.any(inb):
+                if not self.z2elev:
+                    z_arc[i] = np.max(zcov[inb])
+                else:
+                    z_arc[i] = np.min(zcov[inb])
+
+        valid = np.isfinite(z_arc)
+        if not np.any(valid):
+            return None
+
+        vi = np.flatnonzero(valid)
+        z_arc = np.interp(np.arange(len(z_arc)), vi, z_arc[valid], left=z_arc[valid][0], right=z_arc[valid][-1])
+
+        w = int(self.coverageArcSmoothing)
+        if w < 1:
+            w = 1
+        if w % 2 == 0:
+            w += 1
+        if w > 1:
+            pad = w // 2
+            zp = np.pad(z_arc, (pad, pad), mode="edge")
+            ker = np.ones(w, dtype=float) / float(w)
+            z_arc = np.convolve(zp, ker, mode="valid")
+
+        return xbins, z_arc
 
     def _plotTomographyContourModel(self, nx, ny, nlevels):
 
@@ -1032,9 +1168,6 @@ E-mail: vjs279@hotmail.com
                 if xlim[i] not in xblank:
                     xblank.append(xlim[i])
                     zblank.append(zlim[i])
-
-        xblank = xlim
-        zblank = zlim
                 
         self.xbln = xblank
         self.zbln = zblank
@@ -1044,9 +1177,6 @@ E-mail: vjs279@hotmail.com
         limits = [(i,j) for i,j in zip(xblank,zblank)]
         
         clippath = Path(limits)
-        patch = PathPatch(clippath, facecolor='none', alpha = 0)
-        self.ax_tomography.add_patch(patch)
-
         patch = PathPatch(clippath, facecolor='none', alpha = 0)
         self.ax_tomography.add_patch(patch)
 
@@ -1896,11 +2026,45 @@ E-mail: vjs279@hotmail.com
             else:
                 messagebox.showinfo(title="Refrainv", message="Outside-coverage areas are now shown.")
             plotOptionsWindow.tkraise()
+
+        def toggleArcMask():
+
+            self.maskBelowCoverageArc = not self.maskBelowCoverageArc
+
+            if self.tomoPlot and self.tomoContourSettings is not None:
+                self.clearTomoPlot()
+                nx, ny, nlevels = self.tomoContourSettings
+                self._plotTomographyContourModel(nx, ny, nlevels)
+
+            if self.maskBelowCoverageArc:
+                messagebox.showinfo(title="Refrainv", message="Arc masking below coverage enabled.")
+            else:
+                messagebox.showinfo(title="Refrainv", message="Arc masking below coverage disabled.")
+            plotOptionsWindow.tkraise()
+
+        def setArcMaskBuffer():
+
+            new_buffer = simpledialog.askfloat("Refrainv", "Enter arc masking buffer in meters (cancel for auto):")
+            if new_buffer is None:
+                self.coverageArcBuffer = None
+            else:
+                self.coverageArcBuffer = float(new_buffer)
+
+            if self.tomoPlot and self.tomoContourSettings is not None:
+                self.clearTomoPlot()
+                nx, ny, nlevels = self.tomoContourSettings
+                self._plotTomographyContourModel(nx, ny, nlevels)
+
+            if self.coverageArcBuffer is None:
+                messagebox.showinfo(title="Refrainv", message="Arc masking buffer set to automatic.")
+            else:
+                messagebox.showinfo(title="Refrainv", message="Arc masking buffer set to %.2f m."%self.coverageArcBuffer)
+            plotOptionsWindow.tkraise()
         
         plotOptionsWindow = Toplevel(self)
         plotOptionsWindow.title('Refrainv - Plot options')
         plotOptionsWindow.configure(bg = "#F0F0F0")
-        plotOptionsWindow.geometry("350x500")
+        plotOptionsWindow.geometry("350x600")
         plotOptionsWindow.resizable(0,0)
         plotOptionsWindow.iconbitmap("%s/images/ico_refrapy.ico"%getcwd())
         Label(plotOptionsWindow, text = "Plot options",font=("Arial", 11)).grid(row=0,column=0,sticky="EW",pady=5,padx=65)
@@ -1915,6 +2079,8 @@ E-mail: vjs279@hotmail.com
         Button(plotOptionsWindow,text="Show/hide grid lines", command = gridLines, width = 30).grid(row = 9, column = 0,pady=5,padx=65)
         Button(plotOptionsWindow,text="Change traveltimes line color", command = dataLinesColor, width = 30).grid(row = 10, column = 0,pady=5,padx=65)
         Button(plotOptionsWindow,text="Show/hide areas outside ray coverage", command = hideOutsideCoverage, width = 30).grid(row = 11, column = 0,pady=5,padx=65)
+        Button(plotOptionsWindow,text="Toggle arc masking below coverage", command = toggleArcMask, width = 30).grid(row = 12, column = 0,pady=5,padx=65)
+        Button(plotOptionsWindow,text="Set arc masking buffer (m)", command = setArcMaskBuffer, width = 30).grid(row = 13, column = 0,pady=5,padx=65)
         
         plotOptionsWindow.tkraise()
         

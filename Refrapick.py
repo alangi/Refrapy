@@ -20,6 +20,22 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+def _ensure_ext(filepath, ext):
+    """
+    Ensure extension only when needed.
+    Examples:
+    - "line1" -> "line1.sgt"
+    - "line1.sgt" -> "line1.sgt"
+    - "line1.SGT" -> "line1.SGT"
+    - "line1.sgt.sgt" -> "line1.sgt.sgt"
+    """
+    base, current_ext = path.splitext(filepath)
+    if current_ext == "":
+        return filepath + ext
+    if current_ext.lower() == ext.lower():
+        return filepath
+    return filepath
+
 class Refrapick(Tk):
     
     def __init__(self):
@@ -1052,9 +1068,9 @@ class Refrapick(Tk):
         
             new_gainFactor = simpledialog.askfloat("Refrapick","Enter the new gain factor (default is 3):")
 
-            if new_gainFactor:
+            if new_gainFactor is not None:
 
-                self.gainFacotr = new_gainFactor
+                self.gainFactor = new_gainFactor
                 messagebox.showinfo(title="Refrapick", message="The gain factor has been changed")        
         
         plotOptionsWindow = Toplevel(self)
@@ -1094,11 +1110,16 @@ class Refrapick(Tk):
 
                         if self.xpicks[self.currentSt]: self.clearPicks()
 
-                        self.receiverPositions[self.currentSt] = [i/self.dxs[self.currentSt] for i in self.receiverPositions[self.currentSt]]
-                        self.xends[self.currentSt] = self.xends[self.currentSt]/self.dxs[self.currentSt]                    
+                        cur = self.currentSt
+                        nch = self.nchannels[cur]
+                        if self.x1s[cur] is not None:
+                            x0 = self.x1s[cur]
+                        else:
+                            x0 = self.receiverPositions[cur][0]
+
                         self.dxs[self.currentSt] = new_dx
-                        self.receiverPositions[self.currentSt] = [i*self.dxs[self.currentSt] for i in self.receiverPositions[self.currentSt]]
-                        self.xends[self.currentSt] = self.xends[self.currentSt]*self.dxs[self.currentSt]                    
+                        self.receiverPositions[cur] = [x0 + k*new_dx for k in range(nch)]
+                        self.xends[cur] = x0 + new_dx*(nch-1)
                         
                         for i in range(len(self.tracesArts[self.currentSt])):
 
@@ -1122,7 +1143,7 @@ class Refrapick(Tk):
 
                 new_x1 = simpledialog.askfloat("Refrapick","Enter the new position for the first receiver in meters (for %s):"%self.stNames[self.currentSt])
 
-                if new_x1:
+                if new_x1 is not None:
 
                     if self.xpicks[self.currentSt]: self.clearPicks()
                   
@@ -1176,11 +1197,11 @@ class Refrapick(Tk):
 
             delay = simpledialog.askfloat("Refrapick","Enter the delay time in seconds to correct shot time:")
 
-            if delay:
+            if delay is not None:
 
                 for i in range(len(self.sts)):
                     
-                    for j in range(len(self.tracesArts[self.currentSt])):
+                    for j in range(len(self.tracesArts[i])):
 
                         self.tracesArts[i][j].set_ydata(self.tracesTime[i][j]+delay)
                         self.tracesTime[i][j]+=delay
@@ -1272,8 +1293,14 @@ class Refrapick(Tk):
                     st = read(file)
 
                     if st[0].stats._format == "SEG2":
-                        
-                        dx = float(st[1].stats.seg2['RECEIVER_LOCATION'])-float(st[0].stats.seg2['RECEIVER_LOCATION'])
+
+                        if len(st) >= 2:
+                            dx = float(st[1].stats.seg2['RECEIVER_LOCATION'])-float(st[0].stats.seg2['RECEIVER_LOCATION'])
+                        else:
+                            dx = simpledialog.askfloat("Refrapick","Enter the receiver spacing (in meters) for %s:"%path.basename(file))
+                            if dx is None or dx <= 0:
+                                dx = 1
+                                messagebox.showinfo('Refrapick','SEG2 file has one trace or invalid dx: dx = 1 m will be assigned to %s'%path.basename(file))
                         delay = float(st[0].stats.seg2['DELAY'])
                         source = float(st[0].stats.seg2['SOURCE_LOCATION'])
                         x1 = float(st[0].stats.seg2['RECEIVER_LOCATION'])
@@ -1503,7 +1530,7 @@ E-mail: vjs279@hotmail.com
             
             maxTime = simpledialog.askfloat("Refrapick","Enter the new maximum time:")
                 
-            if maxTime:
+            if maxTime is not None:
 
                 for i in range(len(self.tracesArts[self.currentSt])):
 
@@ -1557,11 +1584,9 @@ E-mail: vjs279@hotmail.com
 
         if self.fillSide[self.currentSt] == 1 or self.fillSide[self.currentSt] == -1:
 
-            for i in range(len(self.sts[self.currentSt])):
-                
-                self.fillArts[self.currentSt][:].pop(i).remove()
-
-            del self.fillArts[self.currentSt][:]
+            for art in list(self.fillArts[self.currentSt]):
+                art.remove()
+            self.fillArts[self.currentSt].clear()
             self.fillSide[self.currentSt] = 0
             self.figs[self.currentSt].canvas.draw()
     
@@ -1571,11 +1596,9 @@ E-mail: vjs279@hotmail.com
 
             if self.fillSide[self.currentSt] == -1 or self.fillSide[self.currentSt] == 1:
 
-                for i in range(len(self.sts[self.currentSt])):
-                    
-                    self.fillArts[self.currentSt][:].pop(i).remove()
-                        
-                del self.fillArts[self.currentSt][:]
+                for art in list(self.fillArts[self.currentSt]):
+                    art.remove()
+                self.fillArts[self.currentSt].clear()
                 
             for i in range(len(self.sts[self.currentSt])):
 
@@ -1595,11 +1618,9 @@ E-mail: vjs279@hotmail.com
 
             if self.fillSide[self.currentSt] == -1 or self.fillSide[self.currentSt] == 1:
 
-                for i in range(len(self.sts[self.currentSt])):
-                    
-                    self.fillArts[self.currentSt][:].pop(i).remove()
-                        
-                del self.fillArts[self.currentSt][:]
+                for art in list(self.fillArts[self.currentSt]):
+                    art.remove()
+                self.fillArts[self.currentSt].clear()
 
                 
             for i in range(len(self.sts[self.currentSt])):
@@ -1819,6 +1840,8 @@ E-mail: vjs279@hotmail.com
                 def click1(event):
 
                     if event.button == 1:
+                        if event.xdata is None or event.ydata is None:
+                            return
 
                         x = min(self.receiverPositions[self.currentSt], key = lambda x: abs(event.xdata - x))
 
@@ -1828,6 +1851,8 @@ E-mail: vjs279@hotmail.com
                 def click2(event):
 
                     if event.button == 3:
+                        if event.xdata is None or event.ydata is None:
+                            return
 
                         self.click2on = True
                         x = min(self.receiverPositions[self.currentSt], key = lambda x: abs(event.xdata - x))
@@ -1841,6 +1866,8 @@ E-mail: vjs279@hotmail.com
                 def move(event):
 
                     if self.click2on:
+                        if event.xdata is None or event.ydata is None:
+                            return
 
                         self.xpickLine.append(event.xdata)
                         self.tpickLine.append(event.ydata)
@@ -1853,6 +1880,9 @@ E-mail: vjs279@hotmail.com
                 def release(event):
 
                     if self.click2on:
+                        if event.xdata is None or event.ydata is None:
+                            self.click2on = False
+                            return
                         
                         x = min(self.receiverPositions[self.currentSt], key = lambda x: abs(event.xdata - x))
 
@@ -2016,9 +2046,7 @@ E-mail: vjs279@hotmail.com
         if not pickFile:
             return
 
-        # BONUS: if user typed a name without .sgt, ensure extension exactly once
-        if not pickFile.lower().endswith(".sgt"):
-            pickFile = pickFile + ".sgt"
+        pickFile = _ensure_ext(pickFile, ".sgt")
 
         # Count total measurements across all shots
         nMeasurements = sum(len(self.xpicks[i]) for i in range(len(self.sts)))

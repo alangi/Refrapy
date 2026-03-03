@@ -1933,134 +1933,140 @@ E-mail: vjs279@hotmail.com
                     
                 self.figs[self.currentSt].canvas.draw()
 
-    def savePicks(self):
+def savePicks(self):
+    """
+    Export picks to a .sgt file (pyGIMLi/refraction-style format).
 
-        if self.sts:
+    Fixes:
+    - Correctly detects whether ANY picks exist (not just last record).
+    - Avoids UnboundLocalError by always sorting picks inside the per-shot loop.
+    - Ensures the no-topography branch also loops over shots (i defined).
+    - Bonus: prevents ".sgt.sgt" by using defaultextension and only appending if missing.
+    """
+    if not self.sts:
+        return
 
-            allx = []
-            
-            for i in range(len(self.sts)):
-                
-                for pos in self.receiverPositions[i]:
+    # Build unique list of all shot + receiver x positions
+    allx = []
+    for i in range(len(self.sts)):
+        for pos in self.receiverPositions[i]:
+            allx.append(pos)
 
-                    allx.append(pos)
-      
-                if self.xpicks[i]: pickPresent = True
-                else: pickPresent = False
-            
-            sgx = list(set(allx+self.sources))
-            
-            if pickPresent == False: messagebox.showerror(title="Refrapick", message="There are no picks to be exported!")
+    # IMPORTANT: detect picks across ALL records
+    pickPresent = any(bool(self.xpicks[i]) for i in range(len(self.sts)))
+    if not pickPresent:
+        messagebox.showerror(title="Refrapick", message="There are no picks to be exported!")
+        return
 
+    sgx = list(set(allx + self.sources))
+    sgx = np.asarray(sgx, dtype=float)
+
+    # Ask whether to load topography
+    use_topo = messagebox.askyesno("Refrapick", "Load a topography file (x,z)?")
+
+    sgz = None
+    if use_topo:
+        elevFile = filedialog.askopenfilename(
+            title='Open',
+            initialdir=self.projPath + "/gps/",
+            filetypes=[('Text file', '*.txt'), ('CSV file', '*.csv')]
+        )
+
+        # If user cancels topo selection, fall back to flat topo
+        if elevFile:
+            xtopo, ztopo = [], []
+            with open(elevFile, "r") as file:
+                for l in file.readlines():
+                    parts = l.replace(' ', ',').replace('\t', ',').replace(';', ',').replace('\n', '').split(',')
+                    if len(parts) < 2:
+                        continue
+                    try:
+                        xtopo.append(float(parts[0]))
+                        ztopo.append(float(parts[1]))
+                    except ValueError:
+                        continue
+
+            if len(xtopo) >= 2:
+                f = interp1d(
+                    xtopo, ztopo,
+                    kind="cubic",
+                    fill_value=(ztopo[0], ztopo[-1]),
+                    bounds_error=False
+                )
+                sgz = f(sgx)
             else:
-            
-                if messagebox.askyesno("Refrapick", "Load a topography file (x,z)?"):
-                    
-                    elevFile = filedialog.askopenfilename(title='Open', initialdir = self.projPath+"/gps/", filetypes=[('Text file', '*.txt'),
-                                                                                                                    ('CSV file', '*.csv')])
+                # Not enough topo points; fall back to flat
+                sgz = np.zeros_like(sgx)
 
-                    if elevFile:
+    # Sort shot/geophone points (and topo if present)
+    xinds = sgx.argsort()
+    sgx = sgx[xinds]
+    if sgz is None:
+        sgz = np.zeros_like(sgx)
+    else:
+        sgz = np.asarray(sgz)[xinds]
 
-                        xtopo, ztopo = [], []
-                       
-                        with open(elevFile, "r") as file:
+    # Ask where to save
+    pickFile = filedialog.asksaveasfilename(
+        title='Save',
+        initialdir=self.projPath + "/picks/",
+        defaultextension=".sgt",                 # BONUS: helps avoid double-extension
+        filetypes=[('Pick file', '*.sgt')]
+    )
+    if not pickFile:
+        return
 
-                            lines = file.readlines()
+    # BONUS: if user typed a name without .sgt, ensure extension exactly once
+    if not pickFile.lower().endswith(".sgt"):
+        pickFile = pickFile + ".sgt"
 
-                            for l in lines:
+    # Count total measurements across all shots
+    nMeasurements = sum(len(self.xpicks[i]) for i in range(len(self.sts)))
 
-                                pos = l.replace(' ', ',').replace('	',',').replace(';',',').replace('\n','').split(',')[0]
-                                elev = l.replace(' ', ',').replace('	',',').replace(';',',').replace('\n','').split(',')[1]
-                                xtopo.append(float(pos))
-                                ztopo.append(float(elev))
-                            
-                        f = interp1d(xtopo,ztopo, kind = "cubic", fill_value=(ztopo[0], ztopo[-1]), bounds_error=False)#, fill_value="extrapolate")
-                        sgz = f(sgx)
-                        xinds = array(sgx).argsort()
-                        sgx = array(sgx)[xinds]
-                        sgz = array(sgz)[xinds]
-                        pickFile = filedialog.asksaveasfilename(title='Save',initialdir = self.projPath+"/picks/",filetypes=[('Pick file', '*.sgt')])
+    with open(pickFile, "w") as outFile:
+        outFile.write(f"{len(sgx)} # shot/geophone points\n")
+        outFile.write("#x y\n")
+        for x, z in zip(sgx, sgz):
+            outFile.write(f"{x:.2f} {z:.2f}\n")
 
-                        if pickFile:
+        outFile.write(f"{nMeasurements} # measurements\n")
+        outFile.write("#s g t\n")
 
-                            with open(pickFile+".sgt", "w") as outFile:
+        # Write picks per shot, sorted by receiver x while keeping times aligned
+        for i in range(len(self.sts)):
+            if not self.xpicks[i]:
+                continue
 
-                                outFile.write("%d # shot/geophone points\n#x y\n"%(len(sgx)))
-                                
-                                for i in range(len(sgx)):
+            # Safety: keep arrays aligned
+            xp = np.asarray(self.xpicks[i], dtype=float)
+            tp = np.asarray(self.tpicks[i], dtype=float)
+            n = min(len(xp), len(tp))
+            if n == 0:
+                continue
+            xp = xp[:n]
+            tp = tp[:n]
 
-                                    outFile.write("%.2f %.2f\n"%(sgx[i],sgz[i]))
+            order = xp.argsort()
+            sortedxpicks = xp[order]
+            sortedtpicks = tp[order]
 
-                                nMeasurements = 0
-                                
-                                for i in range(len(self.sts)): nMeasurements+=len(self.xpicks[i])
-                                
-                                outFile.write("%d # measurements\n#s g t\n"%nMeasurements)
+            # Source index (1-based)
+            s_idx = np.flatnonzero(np.isclose(sgx, float(self.sources[i])))
+            if s_idx.size == 0:
+                # If we can't find the source in sgx, skip this shot
+                continue
+            s = int(s_idx[0]) + 1
 
-                                for i in range(len(self.sts)):
+            for xpick, tpick in zip(sortedxpicks, sortedtpicks):
+                g_idx = np.flatnonzero(np.isclose(sgx, float(xpick)))
+                if g_idx.size == 0:
+                    continue
+                g = int(g_idx[0]) + 1
+                t = float(tpick)
+                outFile.write(f"{s} {g} {t:.6f}\n")
 
-                                    xinds = array(self.xpicks[i]).argsort()
-                                    sortedxpicks = array(self.xpicks[i])[xinds]
-                                    sortedtpicks = array(self.tpicks[i])[xinds]     
-
-                                    for xpick, tpick in zip(sortedxpicks, sortedtpicks):
-
-                                        #s = where(sgx == self.sources[i])[0][0]+1
-                                        #g = where(sgx == xpick)[0][0]+1
-                                        s_idx = np.flatnonzero(np.isclose(np.asarray(sgx), self.sources[i]))
-                                        g_idx = np.flatnonzero(np.isclose(np.asarray(sgx), xpick))
-
-                                        if s_idx.size == 0 or g_idx.size == 0:
-                                            # Skip or raise — skipping is safer for batch export
-                                            continue
-
-                                        s = int(s_idx[0]) + 1
-                                        g = int(g_idx[0]) + 1
-                                        t = float(tpick)
-
-                                        outFile.write(f"{s} {g} {t:.6f}\n")
-
-                else:
-
-                    pickFile = filedialog.asksaveasfilename(title='Save',initialdir = self.projPath+"/picks/",filetypes=[('Pick file', '*.sgt')])
-
-                    if pickFile:
-                        
-                        with open(pickFile+".sgt", "w") as outFile:
-
-                            outFile.write("%d # shot/geophone points\n"%(len(sgx)))
-                            outFile.write("#x y\n")
-                            
-                            for i in range(len(sgx)):
-
-                                outFile.write("%.2f 0.00\n"%sgx[i])
-
-                            nMeasurements = 0
-                                
-                            for i in range(len(self.sts)): nMeasurements+=len(self.xpicks[i])
-                            
-                            outFile.write("%d # measurements\n#s g t\n"%nMeasurements)
-
-                            for xpick, tpick in zip(sortedxpicks, sortedtpicks):
-
-                                #s = where(sgx == self.sources[i])[0][0]+1
-                                #g = where(sgx == xpick)[0][0]+1
-                                s_idx = np.flatnonzero(np.isclose(np.asarray(sgx), self.sources[i]))
-                                g_idx = np.flatnonzero(np.isclose(np.asarray(sgx), xpick))
-
-                                if s_idx.size == 0 or g_idx.size == 0:
-                                    # Skip or raise — skipping is safer for batch export
-                                    continue
-
-                                s = int(s_idx[0]) + 1
-                                g = int(g_idx[0]) + 1
-                                t = float(tpick)
-
-                                outFile.write(f"{s} {g} {t:.6f}\n")
-                                    
-                                    
-                messagebox.showinfo(title="Refrapick", message="The pick file has been saved!")
-                
+    messagebox.showinfo(title="Refrapick", message="The pick file has been saved!")
+    
     def clearPicks(self):
 
         if self.sts:

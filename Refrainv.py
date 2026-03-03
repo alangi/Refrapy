@@ -297,8 +297,8 @@ E-mail: vjs279@hotmail.com
 
                 if messagebox.askyesno("Refrainv", "Remove layer(s) (from time-terms) over tomography model?"):
 
-                    if self.layer2: self.merged_layer2.remove()
-                    if self.layer3: self.merged_layer3.remove()
+                    if self.layer2: self._safe_remove(getattr(self, "merged_layer2", None)); self.merged_layer2 = None
+                    if self.layer3: self._safe_remove(getattr(self, "merged_layer3", None)); self.merged_layer3 = None
                     self.fig_tomography.canvas.draw()
                     self.showMerged = False
                     messagebox.showinfo(title="Refrainv", message="Layers removed!")
@@ -875,8 +875,7 @@ E-mail: vjs279@hotmail.com
     
     def clearTomoPlot(self):
 
-        self.fig_tomography.clf()
-        self.ax_tomography = self.fig_tomography.add_subplot(111)
+        self.ax_tomography.cla()
         self.fig_tomography.patch.set_facecolor('#F0F0F0')
         self.ax_tomography.set_title("Tomography velocity model")
         self.ax_tomography.set_xlabel("POSITION [m]")
@@ -889,8 +888,12 @@ E-mail: vjs279@hotmail.com
 
         if self.showMerged:
 
-            if self.layer2: self.merged_layer2.remove()
-            if self.layer3: self.merged_layer3.remove()
+            if self.layer2:
+                self._safe_remove(getattr(self, "merged_layer2", None))
+                self.merged_layer2 = None
+            if self.layer3:
+                self._safe_remove(getattr(self, "merged_layer3", None))
+                self.merged_layer3 = None
             self.showMerged = False
         
         self.ax_tomography.set_aspect("equal")
@@ -917,8 +920,12 @@ E-mail: vjs279@hotmail.com
 
         if self.showMerged:
 
-            if self.layer2: self.merged_layer2.remove()
-            if self.layer3: self.merged_layer3.remove()
+            if self.layer2:
+                self._safe_remove(getattr(self, "merged_layer2", None))
+                self.merged_layer2 = None
+            if self.layer3:
+                self._safe_remove(getattr(self, "merged_layer3", None))
+                self.merged_layer3 = None
             self.showMerged = False
         
         self.ax_timeterms.set_aspect("equal")
@@ -928,6 +935,29 @@ E-mail: vjs279@hotmail.com
         self.ax_timeterms.xaxis.set_ticks_position('bottom')
         self.timetermsPlot = False
         self.fig_timeterms.canvas.draw()
+
+    def _safe_remove(self, obj):
+
+        if obj is None or obj is False:
+            return
+
+        if isinstance(obj, (list, tuple)):
+            for item in obj:
+                self._safe_remove(item)
+            return
+
+        if hasattr(obj, "remove"):
+            try:
+                obj.remove()
+                return
+            except Exception:
+                pass
+
+        if hasattr(obj, "set_visible"):
+            try:
+                obj.set_visible(False)
+            except Exception:
+                pass
 
     def _getTomographyModelForDisplay(self):
 
@@ -962,12 +992,15 @@ E-mail: vjs279@hotmail.com
         self.tomoModel_v = np.asarray(self.mgr.model)
         self.tomoContourSettings = (nx, ny, nlevels)
 
-        x_grid = linspace(min(x), max(x), nx)
+        xmin = min(min(self.sx), min(self.gx))
+        xmax = max(max(self.sx), max(self.gx))
+
+        x_grid = linspace(xmin, xmax, nx)
         y_grid = linspace(min(z), max(z), ny)
         xi,zi = meshgrid(x_grid,y_grid)
-        vi = griddata((x, z), v,(xi,zi), method = 'linear')
+        vi = griddata((x, z), v,(xi,zi), method = 'linear', fill_value=np.nan)
 
-        cm = self.ax_tomography.contourf(xi, zi, vi, levels=nlevels, cmap=self.colormap,
+        cm = self.ax_tomography.contourf(xi, zi, np.ma.masked_invalid(vi), levels=nlevels, cmap=self.colormap,
                                          extend="both", vmin=self.minVelLimit, vmax=self.maxVelLimit)
         self.cmPlot = cm
 
@@ -1017,7 +1050,16 @@ E-mail: vjs279@hotmail.com
         patch = PathPatch(clippath, facecolor='none', alpha = 0)
         self.ax_tomography.add_patch(patch)
 
-        for c in cm.collections:
+        # Matplotlib compatibility: QuadContourSet API changed across versions
+        if hasattr(cm, "collections"):
+            artists = cm.collections
+        elif hasattr(cm, "artists"):
+            artists = cm.artists
+        else:
+            # Fallback: nothing to iterate, avoid hard crash
+            artists = []
+
+        for c in artists:
             c.set_clip_path(patch)
 
         if self.showRayPath:
@@ -1029,7 +1071,7 @@ E-mail: vjs279@hotmail.com
         if self.showGeophones:
             self.geophonesPlot_tomography = self.ax_tomography.scatter(self.gx,self.gz, marker=7,c="k",s=self.dx*10,zorder=99)
             
-        self.ax_tomography.set_xlim(min(x2min),max(x2max))
+        self.ax_tomography.set_xlim(xmin, xmax)
         self.fig_tomography.canvas.draw()
         self.tomoPlot = True
                 
@@ -1843,6 +1885,7 @@ E-mail: vjs279@hotmail.com
                     self.coverageVector = None
 
             if self.tomoContourSettings is not None:
+                self.clearTomoPlot()
                 nx, ny, nlevels = self.tomoContourSettings
                 self._plotTomographyContourModel(nx, ny, nlevels)
             else:
@@ -1871,7 +1914,7 @@ E-mail: vjs279@hotmail.com
         Button(plotOptionsWindow,text="Show/hide source positions", command = sourcePosition, width = 30).grid(row = 8, column = 0,pady=5,padx=65)
         Button(plotOptionsWindow,text="Show/hide grid lines", command = gridLines, width = 30).grid(row = 9, column = 0,pady=5,padx=65)
         Button(plotOptionsWindow,text="Change traveltimes line color", command = dataLinesColor, width = 30).grid(row = 10, column = 0,pady=5,padx=65)
-        Button(plotOptionsWindow,text="Hide areas outside ray coverage", command = hideOutsideCoverage, width = 30).grid(row = 11, column = 0,pady=5,padx=65)
+        Button(plotOptionsWindow,text="Show/hide areas outside ray coverage", command = hideOutsideCoverage, width = 30).grid(row = 11, column = 0,pady=5,padx=65)
         
         plotOptionsWindow.tkraise()
         

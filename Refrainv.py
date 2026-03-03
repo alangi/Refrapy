@@ -24,6 +24,24 @@ from Pmw import initialise, Balloon
 import pygimli as pg
 from pygimli.physics import TravelTimeManager
 
+class SafeNavigationToolbar2Tk(NavigationToolbar2Tk):
+
+    def update(self):
+        try:
+            if hasattr(self, "winfo_exists") and not self.winfo_exists():
+                return
+            super().update()
+        except (TclError, RuntimeError):
+            return
+
+    def set_history_buttons(self):
+        try:
+            if hasattr(self, "winfo_exists") and not self.winfo_exists():
+                return
+            super().set_history_buttons()
+        except (TclError, RuntimeError):
+            return
+
 class Refrainv(Tk):
     
     def __init__(self):
@@ -201,16 +219,7 @@ E-mail: vjs279@hotmail.com
                 except Exception:
                     pass
 
-            self._safe_destroy_widget(getattr(self, "toolbar_data", None))
-            self._safe_destroy_widget(getattr(self, "toolbar_timeterms", None))
-            self._safe_destroy_widget(getattr(self, "toolbar_tomography", None))
-            self._safe_destroy_widget(getattr(self, "canvas_data", None))
-            self._safe_destroy_widget(getattr(self, "canvas_timeterms", None))
-            self._safe_destroy_widget(getattr(self, "canvas_tomography", None))
-            self._safe_destroy_widget(getattr(self, "frame_data", None))
-            self._safe_destroy_widget(getattr(self, "frame_timeterms", None))
-            self._safe_destroy_widget(getattr(self, "frame_tomography", None))
-            self._safe_destroy_widget(getattr(self, "frame_plots", None))
+            self._safe_close_main_panels()
             self.initiateVariables()
             self.statusLabel.configure(text="Create or load a project to start",font=("Arial", 11))
             messagebox.showinfo(title="Refrainv", message="All cleared successfully!")
@@ -280,7 +289,12 @@ E-mail: vjs279@hotmail.com
 
         out = messagebox.askyesno("Refrainv", "Do you want to close the software?")
 
-        if out: self.destroy(); self.quit()
+        if out:
+            try:
+                self._safe_close_main_panels()
+            except Exception:
+                pass
+            self.destroy(); self.quit()
 
     def assignLayer1(self):
 
@@ -355,7 +369,7 @@ E-mail: vjs279@hotmail.com
         self.fig_data = plt.figure(figsize = (6,8.1))
         self.canvas_data = FigureCanvasTkAgg(self.fig_data, self.frame_data)
         self.canvas_data.draw()
-        self.toolbar_data = NavigationToolbar2Tk(self.canvas_data, self.frame_data)
+        self.toolbar_data = SafeNavigationToolbar2Tk(self.canvas_data, self.frame_data)
         self.toolbar_data.update()
         self.canvas_data._tkcanvas.pack()
         self.ax_data = self.fig_data.add_subplot(111)
@@ -376,7 +390,7 @@ E-mail: vjs279@hotmail.com
         self.fig_timeterms = plt.figure(figsize = (9.5,3.7))
         self.canvas_timeterms = FigureCanvasTkAgg(self.fig_timeterms, self.frame_timeterms)
         self.canvas_timeterms.draw()
-        self.toolbar_timeterms = NavigationToolbar2Tk(self.canvas_timeterms, self.frame_timeterms)
+        self.toolbar_timeterms = SafeNavigationToolbar2Tk(self.canvas_timeterms, self.frame_timeterms)
         self.toolbar_timeterms.update()
         self.canvas_timeterms._tkcanvas.pack()
         self.ax_timeterms = self.fig_timeterms.add_subplot(111)
@@ -399,7 +413,7 @@ E-mail: vjs279@hotmail.com
         self.fig_tomography = plt.figure(figsize = (9.5,3.7))
         self.canvas_tomography = FigureCanvasTkAgg(self.fig_tomography, self.frame_tomography)
         self.canvas_tomography.draw()
-        self.toolbar_tomography = NavigationToolbar2Tk(self.canvas_tomography, self.frame_tomography)
+        self.toolbar_tomography = SafeNavigationToolbar2Tk(self.canvas_tomography, self.frame_tomography)
         self.toolbar_tomography.update()
         self.canvas_tomography._tkcanvas.pack()
         self.ax_tomography = self.fig_tomography.add_subplot(111)
@@ -989,6 +1003,19 @@ E-mail: vjs279@hotmail.com
         except Exception:
             pass
 
+    def _safe_close_main_panels(self):
+
+        self._safe_destroy_widget(getattr(self, "toolbar_data", None))
+        self._safe_destroy_widget(getattr(self, "toolbar_timeterms", None))
+        self._safe_destroy_widget(getattr(self, "toolbar_tomography", None))
+        self._safe_destroy_widget(getattr(self, "canvas_data", None))
+        self._safe_destroy_widget(getattr(self, "canvas_timeterms", None))
+        self._safe_destroy_widget(getattr(self, "canvas_tomography", None))
+        self._safe_destroy_widget(getattr(self, "frame_data", None))
+        self._safe_destroy_widget(getattr(self, "frame_timeterms", None))
+        self._safe_destroy_widget(getattr(self, "frame_tomography", None))
+        self._safe_destroy_widget(getattr(self, "frame_plots", None))
+
     def _safe_remove(self, obj):
 
         if obj is None or obj is False:
@@ -1202,7 +1229,10 @@ E-mail: vjs279@hotmail.com
             self.geophonesPlot_tomography = self.ax_tomography.scatter(self.gx,self.gz, marker=7,c="k",s=self.dx*10,zorder=99)
             
         self.ax_tomography.set_xlim(xmin, xmax)
-        self.fig_tomography.canvas.draw()
+        try:
+            self.fig_tomography.canvas.draw()
+        except (TclError, RuntimeError):
+            pass
         self.tomoPlot = True
                 
     def runTomography(self):
@@ -1238,7 +1268,7 @@ E-mail: vjs279@hotmail.com
                 fig.patch.set_facecolor('#F0F0F0')
                 canvas = FigureCanvasTkAgg(fig, frame)
                 canvas.draw()
-                toolbar = NavigationToolbar2Tk(canvas, frame)
+                toolbar = SafeNavigationToolbar2Tk(canvas, frame)
                 toolbar.update()
                 canvas._tkcanvas.pack()
                 
@@ -1470,7 +1500,7 @@ E-mail: vjs279@hotmail.com
             fig1.patch.set_facecolor('#F0F0F0')
             canvas1 = FigureCanvasTkAgg(fig1, frame1)
             canvas1.draw()
-            toolbar1 = NavigationToolbar2Tk(canvas1, frame1)
+            toolbar1 = SafeNavigationToolbar2Tk(canvas1, frame1)
             toolbar1.update()
             canvas1._tkcanvas.pack()
 
@@ -1480,7 +1510,7 @@ E-mail: vjs279@hotmail.com
             fig2.patch.set_facecolor('#F0F0F0')
             canvas2 = FigureCanvasTkAgg(fig2, frame2)
             canvas2.draw()
-            toolbar2 = NavigationToolbar2Tk(canvas2, frame2)
+            toolbar2 = SafeNavigationToolbar2Tk(canvas2, frame2)
             toolbar2.update()
             canvas2._tkcanvas.pack()
             
@@ -1553,7 +1583,7 @@ E-mail: vjs279@hotmail.com
             fig.patch.set_facecolor('#F0F0F0')
             canvas = FigureCanvasTkAgg(fig, frame)
             canvas.draw()
-            toolbar = NavigationToolbar2Tk(canvas, frame)
+            toolbar = SafeNavigationToolbar2Tk(canvas, frame)
             toolbar.update()
             canvas._tkcanvas.pack()
             ax_pg = fig.add_subplot(111)
@@ -1646,7 +1676,7 @@ E-mail: vjs279@hotmail.com
                 fig1.patch.set_facecolor('#F0F0F0')
                 canvas1 = FigureCanvasTkAgg(fig1, frame1)
                 canvas1.draw()
-                toolbar1 = NavigationToolbar2Tk(canvas1, frame1)
+                toolbar1 = SafeNavigationToolbar2Tk(canvas1, frame1)
                 toolbar1.update()
                 canvas1._tkcanvas.pack()
 
@@ -1654,7 +1684,7 @@ E-mail: vjs279@hotmail.com
                 fig2.patch.set_facecolor('#F0F0F0')
                 canvas2 = FigureCanvasTkAgg(fig2, frame2)
                 canvas2.draw()
-                toolbar2 = NavigationToolbar2Tk(canvas2, frame2)
+                toolbar2 = SafeNavigationToolbar2Tk(canvas2, frame2)
                 toolbar2.update()
                 canvas2._tkcanvas.pack()
 
@@ -1662,7 +1692,7 @@ E-mail: vjs279@hotmail.com
                 fig3.patch.set_facecolor('#F0F0F0')
                 canvas3 = FigureCanvasTkAgg(fig3, frame3)
                 canvas3.draw()
-                toolbar3 = NavigationToolbar2Tk(canvas3, frame3)
+                toolbar3 = SafeNavigationToolbar2Tk(canvas3, frame3)
                 toolbar3.update()
                 canvas3._tkcanvas.pack()
 

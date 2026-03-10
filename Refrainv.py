@@ -587,9 +587,19 @@ E-mail: vjs279@hotmail.com
             
             if regw == None: regw = 0.1
 
-            gx = list(set(self.gx))
+            gx_gz_pairs = {}
+
+            for x, z in zip(self.gx, self.gz):
+                key = round(x, 6)   # tolerance for float noise
+                if key not in gx_gz_pairs:
+                    gx_gz_pairs[key] = (x, z)
+
+            gx_sorted = sorted(gx_gz_pairs.keys())
+
+            gx = [gx_gz_pairs[k][0] for k in gx_sorted]
+            gz = [gx_gz_pairs[k][1] for k in gx_sorted]
+
             self.gx_timeterms = gx
-            gz = self.gz[:len(gx)]
             self.gz_timeterms = gz
             
             def solve(layer, G, d, w):
@@ -768,6 +778,15 @@ E-mail: vjs279@hotmail.com
                     self.timeterms_response += list_pt3
                     timeterms_observed += list_ot3
             
+                ##### For testing purposes only #####
+                print("gx_timeterms:", gx[:20], "...", gx[-5:])
+                print("sorted?", gx == sorted(gx))
+                print("len gx:", len(gx), "len gz:", len(gz))
+                if self.layer2:
+                    print("len z_layer2:", len(z_layer2), "min/max:", min(z_layer2), max(z_layer2))
+                if self.layer3:
+                    print("len z_layer3:", len(z_layer3), "min/max:", min(z_layer3), max(z_layer3))
+                
                 if self.layer1 and self.layer2 and not self.layer3: 
 
                     self.fill_layer1 = self.ax_timeterms.fill_between(gx, z_layer2, gz, color = self.layer1_color, alpha = 1,edgecolor = "k", label = "%d m/s"%v1)

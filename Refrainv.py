@@ -25,6 +25,18 @@ from Pmw import initialise, Balloon
 import pygimli as pg
 from pygimli.physics import TravelTimeManager
 
+def _ordered_unique(seq):
+
+    seen = set()
+    out = []
+
+    for item in seq:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+
+    return out
+
 class SafeNavigationToolbar2Tk(NavigationToolbar2Tk):
 
     def update(self):
@@ -534,7 +546,7 @@ E-mail: vjs279@hotmail.com
                             self.dx = float(dxtmp)
                         self.sx, self.sz = [], []
                         
-                        for i in list(set(s)):
+                        for i in _ordered_unique(s):
 
                             self.sx.append(sgx[i-1])
                             self.sz.append(sgz[i-1])
@@ -548,7 +560,7 @@ E-mail: vjs279@hotmail.com
                             self.fig_timeterms.canvas.draw()
                             self.fig_tomography.canvas.draw()
 
-                        for i,src in enumerate(list(set(sx))):
+                        for i,src in enumerate(_ordered_unique(sx)):
         
                             self.sources.append(src)
                             self.xdata.append({src:[]})

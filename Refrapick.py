@@ -1146,10 +1146,14 @@ class Refrapick(Tk):
                 if new_x1 is not None:
 
                     if self.xpicks[self.currentSt]: self.clearPicks()
-                  
+
+                    old_x1 = self.x1s[self.currentSt]
+                    if old_x1 is None:
+                        old_x1 = 0.0
+                    delta_x = new_x1 - old_x1
                     self.x1s[self.currentSt] = new_x1
-                    self.xends[self.currentSt] = self.xends[self.currentSt]+new_x1
-                    self.receiverPositions[self.currentSt] = [i+new_x1 for i in self.receiverPositions[self.currentSt]]
+                    self.xends[self.currentSt] = self.xends[self.currentSt] + delta_x
+                    self.receiverPositions[self.currentSt] = [i + delta_x for i in self.receiverPositions[self.currentSt]]
                     
                     for i in range(len(self.tracesArts[self.currentSt])):
 
@@ -2141,7 +2145,9 @@ E-mail: vjs279@hotmail.com
                     
                         for j in range(len(sx)):
 
-                            if self.sources[i] == sx[j] and gx[j] in self.receiverPositions[i]:
+                            source_match = np.isclose(float(self.sources[i]), float(sx[j]), rtol=0.0, atol=1e-6)
+                            receiver_match = any(np.isclose(float(gx[j]), float(rx), rtol=0.0, atol=1e-6) for rx in self.receiverPositions[i])
+                            if source_match and receiver_match:
 
                                 pickline = self.axs[i].hlines(t[j], gx[j]-(self.dxs[i]*0.25),gx[j]+(self.dxs[i]*0.25),color='r')
                                 self.picksArts[i].append(pickline)

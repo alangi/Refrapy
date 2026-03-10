@@ -301,6 +301,42 @@ E-mail: vjs279@hotmail.com
         self.toolbar_data = None
         self.toolbar_timeterms = None
         self.toolbar_tomography = None
+        self.receiverIndexMap = {}
+        self.receiverGlobalX = []
+        self.receiverGlobalZ = []
+
+    def _receiver_key(self, x):
+        return round(float(x), 6)
+
+    def _build_global_receiver_axis(self):
+
+        gx_gz_pairs = {}
+
+        for x, z in zip(getattr(self, "gx", []), getattr(self, "gz", [])):
+            key = self._receiver_key(x)
+            if key not in gx_gz_pairs:
+                gx_gz_pairs[key] = (float(x), float(z))
+
+        gx_sorted = sorted(gx_gz_pairs.keys())
+        self.receiverGlobalX = [gx_gz_pairs[k][0] for k in gx_sorted]
+        self.receiverGlobalZ = [gx_gz_pairs[k][1] for k in gx_sorted]
+        self.receiverIndexMap = {k: i for i, k in enumerate(gx_sorted)}
+        return self.receiverGlobalX, self.receiverGlobalZ
+
+    def _get_global_receiver_index(self, x):
+
+        if not self.receiverIndexMap or not self.receiverGlobalX:
+            self._build_global_receiver_axis()
+
+        key = self._receiver_key(x)
+        if key in self.receiverIndexMap:
+            return self.receiverIndexMap[key]
+
+        gx = np.asarray(self.receiverGlobalX, dtype=float)
+        ii = np.flatnonzero(np.isclose(gx, float(x), rtol=0.0, atol=1e-6))
+        if ii.size:
+            return int(ii[0])
+        return None
     
     def kill(self):
 
@@ -536,6 +572,7 @@ E-mail: vjs279@hotmail.com
                         self.gz = gz
                         self.sgx = sgx
                         self.sgz = sgz
+                        self._build_global_receiver_axis()
                         gx_unique = sorted(set(gx))
                         if len(gx_unique) >= 2:
                             self.dx = float(gx_unique[1] - gx_unique[0])
@@ -591,6 +628,29 @@ E-mail: vjs279@hotmail.com
 
     def runTimeTerms(self):
 
+        self.velocity1 = None
+        self.velocity2 = None
+        self.velocity3 = None
+
+        self.z_layer2 = None
+        self.z_layer3 = None
+
+        self.timeterms_response = None
+        self.timeterms_response2 = None
+        self.timeterms_response3 = None
+        self.timeterms_respLayer1 = None
+        self.timeterms_respLayer2 = None
+        self.timeterms_respLayer3 = None
+        self.timeterms_response1_x = []
+        self.timeterms_response1_t = []
+        self.timeterms_response2_x = []
+        self.timeterms_response2_t = []
+        self.timeterms_response3_x = []
+        self.timeterms_response3_t = []
+
+        self.gx_timeterms = None
+        self.gz_timeterms = None
+
         if self.layer1 and self.layer2 or self.layer1 and self.layer3:
                     
             self.clearTimeTermsPlot()
@@ -599,17 +659,7 @@ E-mail: vjs279@hotmail.com
             
             if regw == None: regw = 0.1
 
-            gx_gz_pairs = {}
-
-            for x, z in zip(self.gx, self.gz):
-                key = round(x, 6)   # tolerance for float noise
-                if key not in gx_gz_pairs:
-                    gx_gz_pairs[key] = (x, z)
-
-            gx_sorted = sorted(gx_gz_pairs.keys())
-
-            gx = [gx_gz_pairs[k][0] for k in gx_sorted]
-            gz = [gx_gz_pairs[k][1] for k in gx_sorted]
+            gx, gz = self._build_global_receiver_axis()
 
             self.gx_timeterms = gx
             self.gz_timeterms = gz
@@ -702,6 +752,15 @@ E-mail: vjs279@hotmail.com
                 timeterms_observed = list_ot1
 
                 if self.layer2:
+
+                    gidx2 = [int(p[-1]) for p in self.layer2]
+                    if gidx2 and (max(gidx2) >= len(gx) or min(gidx2) < 0):
+                        messagebox.showerror(
+                            title="Refrainv",
+                            message="Invalid global receiver index found in layer 2 picks.\n"
+                                    "Please reload picks and reassign layers."
+                        )
+                        return
                     
                     d2 = array([self.layer2[i][1] for i in range(len(self.layer2))])
                     G2 = zeros((int(len(self.layer2)),
@@ -714,13 +773,23 @@ E-mail: vjs279@hotmail.com
                         G2[i][-1] = self.layer2[i][-3]
 
                     sol_layer2 = solve(self.layer2, G2, d2, regw)
+                    if abs(float(sol_layer2[-1])) <= np.finfo(float).eps:
+                        messagebox.showerror(title="Refrainv", message="Layer 2 solution produced zero slowness.")
+                        return
                     v2 = 1/sol_layer2[-1]
                     self.velocity2 = v2
                     
                     dtg2 = array([i for i in sol_layer2[len(self.sources):-1]]) #delay-time of all geophones
                     dts2 = array([i for i in sol_layer2[:len(self.sources)]]) #delay-time of all sources
-                    
-                    z_layer2 = gz-((dtg2*v1*v2)/(sqrt((v2**2)-(v1**2))))
+
+                    denom2 = (v2**2) - (v1**2)
+                    if not np.isfinite(denom2) or denom2 <= 0:
+                        messagebox.showerror(
+                            title="Refrainv",
+                            message="Invalid layer velocities for layer 2 depth computation (v2 must be greater than v1)."
+                        )
+                        return
+                    z_layer2 = gz-((dtg2*v1*v2)/(sqrt(denom2)))
                     self.z_layer2 = z_layer2
                         
                     list_ot2, list_pt2 = [],[]
@@ -745,6 +814,15 @@ E-mail: vjs279@hotmail.com
                     timeterms_observed += list_ot2
 
                 if self.layer3:
+
+                    gidx3 = [int(p[-1]) for p in self.layer3]
+                    if gidx3 and (max(gidx3) >= len(gx) or min(gidx3) < 0):
+                        messagebox.showerror(
+                            title="Refrainv",
+                            message="Invalid global receiver index found in layer 3 picks.\n"
+                                    "Please reload picks and reassign layers."
+                        )
+                        return
                     
                     d3 = array([self.layer3[i][1] for i in range(len(self.layer3))])
                     G3 = zeros((int(len(self.layer3)),
@@ -757,6 +835,9 @@ E-mail: vjs279@hotmail.com
                         G3[i][-1] = self.layer3[i][-3]
 
                     sol_layer3 = solve(self.layer3, G3, d3, regw)
+                    if abs(float(sol_layer3[-1])) <= np.finfo(float).eps:
+                        messagebox.showerror(title="Refrainv", message="Layer 3 solution produced zero slowness.")
+                        return
                     v3 = 1/sol_layer3[-1] #m/s
                     self.velocity3 = v3
 
@@ -765,8 +846,15 @@ E-mail: vjs279@hotmail.com
 
                     if self.velocity2: upvmed = (v1+v2)/2
                     else: upvmed = v1
-                        
-                    z_layer3 = gz-((dtg3*upvmed*v3)/(sqrt((v3**2)-(upvmed**2))))
+
+                    denom3 = (v3**2) - (upvmed**2)
+                    if not np.isfinite(denom3) or denom3 <= 0:
+                        messagebox.showerror(
+                            title="Refrainv",
+                            message="Invalid layer velocities for layer 3 depth computation (v3 must be greater than upper-layer velocity)."
+                        )
+                        return
+                    z_layer3 = gz-((dtg3*upvmed*v3)/(sqrt(denom3)))
                     self.z_layer3 = z_layer3
 
                     list_ot3, list_pt3 = [],[]
@@ -790,14 +878,14 @@ E-mail: vjs279@hotmail.com
                     self.timeterms_response += list_pt3
                     timeterms_observed += list_ot3
             
-                ##### For testing purposes only #####
-                print("gx_timeterms:", gx[:20], "...", gx[-5:])
-                print("sorted?", gx == sorted(gx))
-                print("len gx:", len(gx), "len gz:", len(gz))
-                if self.layer2:
-                    print("len z_layer2:", len(z_layer2), "min/max:", min(z_layer2), max(z_layer2))
-                if self.layer3:
-                    print("len z_layer3:", len(z_layer3), "min/max:", min(z_layer3), max(z_layer3))
+                if getattr(self, "debugTimeTerms", False):
+                    print("gx_timeterms:", gx[:20], "...", gx[-5:])
+                    print("sorted?", gx == sorted(gx))
+                    print("len gx:", len(gx), "len gz:", len(gz))
+                    if self.layer2:
+                        print("len z_layer2:", len(z_layer2), "min/max:", min(z_layer2), max(z_layer2))
+                    if self.layer3:
+                        print("len z_layer3:", len(z_layer3), "min/max:", min(z_layer3), max(z_layer3))
                 
                 if self.layer1 and self.layer2 and not self.layer3: 
 
@@ -820,7 +908,13 @@ E-mail: vjs279@hotmail.com
                 self.fig_timeterms.canvas.draw()
                 
                 self.timeterms_rmse = sqrt(mean((array(self.timeterms_response)-array(timeterms_observed))**2))
-                self.timeterms_relrmse = (sqrt(mean(square((array(timeterms_observed) - array(self.timeterms_response)) / array(timeterms_observed))))) * 100
+                obs_arr = array(timeterms_observed, dtype=float)
+                pred_arr = array(self.timeterms_response, dtype=float)
+                nz = np.abs(obs_arr) > np.finfo(float).eps
+                if np.any(nz):
+                    self.timeterms_relrmse = (sqrt(mean(square((obs_arr[nz] - pred_arr[nz]) / obs_arr[nz])))) * 100
+                else:
+                    self.timeterms_relrmse = np.nan
                 
                 #messagebox.showinfo('Refrainv','Absolute RMSE = %.2f ms\nRelative RMSE = %.2f%%'%(rmse*1000,relrmse))
                 self.showFit()
@@ -852,68 +946,74 @@ E-mail: vjs279@hotmail.com
                         for b in self.dataArts[iS][arts]:
                             
                             bx = b.get_offsets()[0][0]
-                            iG = where(array(self.dataArts[iS][arts]) == b)[0][0]
+                            gGlobal = self._get_global_receiver_index(bx)
+                            if gGlobal is None:
+                                continue
                             
                             if arts <= bx <= artx:
                                 
                                 bt = b.get_offsets()[0][1]
+                                pick_tuple = (bx, bt, arts, abs(arts-bx), iS, gGlobal)
                                 
-                                if self.layer2interpretate == 1 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer1:
+                                if self.layer2interpretate == 1 and pick_tuple not in self.layer1:
                                     
                                     b.set_color(self.layer1_color)
-                                    self.layer1.append((bx,bt,arts,abs(arts-bx),iS, iG))#geophone_position , arrival_time , source_poisition , offset , index_source , index_geophone
+                                    self.layer1.append(pick_tuple)#geophone_position , arrival_time , source_poisition , offset , index_source , global index_geophone
 
-                                    if (bx,bt,arts,abs(arts-bx),iS, iG) in self.layer2:
+                                    if pick_tuple in self.layer2:
                                         
-                                        self.layer2.remove((bx,bt,arts,abs(arts-bx),iS, iG))
+                                        self.layer2.remove(pick_tuple)
                                         
-                                elif self.layer2interpretate == 2 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer1 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer2:
+                                elif self.layer2interpretate == 2 and pick_tuple not in self.layer1 and pick_tuple not in self.layer2:
                                     
                                     b.set_color(self.layer2_color)
-                                    self.layer2.append((bx,bt,arts,abs(arts-bx),iS, iG))
+                                    self.layer2.append(pick_tuple)
                                     
-                                    if (bx,bt,arts,abs(arts-bx),iS, iG) in self.layer3:
+                                    if pick_tuple in self.layer3:
                                         
-                                        self.layer3.remove((bx,bt,arts,abs(arts-bx),iS, iG))
+                                        self.layer3.remove(pick_tuple)
                                         
-                                elif self.layer2interpretate == 3 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer2 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer1 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer3:
+                                elif self.layer2interpretate == 3 and pick_tuple not in self.layer2 and pick_tuple not in self.layer1 and pick_tuple not in self.layer3:
 
                                     b.set_color(self.layer3_color)
-                                    self.layer3.append((bx,bt,arts,abs(arts-bx),iS, iG))
+                                    self.layer3.append(pick_tuple)
                                     
                     elif artx <= arts:
                         
                         for b in self.dataArts[iS][arts]:
                             
                             bx = b.get_offsets()[0][0]
-                            iG = where(array(self.dataArts[iS][arts]) == b)[0][0]
+                            gGlobal = self._get_global_receiver_index(bx)
+                            if gGlobal is None:
+                                continue
                             
                             if arts >= bx >= artx:
                                 
                                 bt = b.get_offsets()[0][1]
+                                pick_tuple = (bx, bt, arts, abs(arts-bx), iS, gGlobal)
                                 
-                                if self.layer2interpretate == 1 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer1:
+                                if self.layer2interpretate == 1 and pick_tuple not in self.layer1:
                                     
                                     b.set_color(self.layer1_color)
-                                    self.layer1.append((bx,bt,arts,abs(arts-bx),iS, iG))
+                                    self.layer1.append(pick_tuple)
                                     
-                                    if (bx,bt,arts,abs(arts-bx),iS, iG) in self.layer2:
+                                    if pick_tuple in self.layer2:
                                         
-                                        self.layer2.remove((bx,bt,arts,abs(arts-bx),iS, iG))
+                                        self.layer2.remove(pick_tuple)
                                         
-                                elif self.layer2interpretate == 2 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer1 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer2:
+                                elif self.layer2interpretate == 2 and pick_tuple not in self.layer1 and pick_tuple not in self.layer2:
                                     
                                     b.set_color(self.layer2_color)
-                                    self.layer2.append((bx,bt,arts,abs(arts-bx),iS, iG))
+                                    self.layer2.append(pick_tuple)
                                     
-                                    if (bx,bt,arts,abs(arts-bx),iS, iG) in self.layer3:
+                                    if pick_tuple in self.layer3:
                                         
-                                        self.layer3.remove((bx,bt,arts,abs(arts-bx),iS, iG))
+                                        self.layer3.remove(pick_tuple)
                                         
-                                elif self.layer2interpretate == 3 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer2 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer1 and (bx,bt,arts,abs(arts-bx),iS, iG) not in self.layer3:
+                                elif self.layer2interpretate == 3 and pick_tuple not in self.layer2 and pick_tuple not in self.layer1 and pick_tuple not in self.layer3:
 
                                     b.set_color(self.layer3_color)
-                                    self.layer3.append((bx,bt,arts,abs(arts-bx),iS, iG))
+                                    self.layer3.append(pick_tuple)
                     
                     self.fig_data.canvas.draw()
 
@@ -1271,7 +1371,11 @@ E-mail: vjs279@hotmail.com
         x_grid = linspace(xmin, xmax, nx)
         y_grid = linspace(min(z), max(z), ny)
         xi,zi = meshgrid(x_grid,y_grid)
-        vi = griddata((x, z), v,(xi,zi), method = 'linear', fill_value=np.nan)
+        valid = np.isfinite(v)
+        x_valid = x[valid]
+        z_valid = z[valid]
+        v_valid = v[valid]
+        vi = griddata((x_valid, z_valid), v_valid,(xi,zi), method = 'linear', fill_value=np.nan)
 
         x_arc = None
         z_arc = None
@@ -1500,7 +1604,16 @@ E-mail: vjs279@hotmail.com
             Label(tomoWindow, text = "Maximum cell size").grid(row=3,column=0,pady=5,sticky="E")
             paraMaxCellSize_entry = Entry(tomoWindow,width=6)
             paraMaxCellSize_entry.grid(row=3,column=1,pady=5)
-            paraMaxCellSize_entry.insert(0,str(3*(self.gx[1]-self.gx[0])))
+            gx_unique = sorted({float(x) for x in self.gx})
+            if len(gx_unique) >= 2:
+                dx_guess = abs(gx_unique[1] - gx_unique[0])
+                if dx_guess <= 0:
+                    dx_guess = 1.0
+            elif hasattr(self, "dx") and self.dx:
+                dx_guess = abs(float(self.dx))
+            else:
+                dx_guess = 1.0
+            paraMaxCellSize_entry.insert(0, str(3 * dx_guess))
             
             button = Button(tomoWindow, text="View mesh", command=viewMesh).grid(row=4,column=0,columnspan=2,pady=5,sticky="E")
 
@@ -1780,6 +1893,27 @@ E-mail: vjs279@hotmail.com
 
             if self.coords_3d:
 
+                dist = np.asarray(self.coords_3d[0], dtype=float)
+                x = np.asarray(self.coords_3d[1], dtype=float)
+                y = np.asarray(self.coords_3d[2], dtype=float)
+
+                order = np.argsort(dist)
+                dist = dist[order]
+                x = x[order]
+                y = y[order]
+
+                unique_dist, unique_indices = np.unique(dist, return_index=True)
+                dist = unique_dist
+                x = x[unique_indices]
+                y = y[unique_indices]
+
+                if dist.size < 2:
+                    messagebox.showerror(
+                        title="Refrainv",
+                        message="The 3D coordinates file must contain at least two unique distance values."
+                    )
+                    return
+
                 def save3dtomo():
 
                     if self.tomoPlot:
@@ -1879,11 +2013,11 @@ E-mail: vjs279@hotmail.com
 
                 if self.timetermsPlot:
                     
-                    fx = interp1d(self.coords_3d[0],self.coords_3d[1], kind = "linear", fill_value = "extrapolate")
-                    fy = interp1d(self.coords_3d[0],self.coords_3d[2], kind = "linear", fill_value = "extrapolate")
+                    fx = interp1d(dist, x, kind = "linear", bounds_error = False, fill_value = "extrapolate")
+                    fy = interp1d(dist, y, kind = "linear", bounds_error = False, fill_value = "extrapolate")
                     self.new_x_timeterms = fx(self.gx_timeterms)
                     self.new_y_timeterms = fy(self.gx_timeterms)
-                    ax_coords.plot(self.coords_3d[1],self.coords_3d[2],c="k")
+                    ax_coords.plot(x, y, c="k")
                     
                     if self.layer1: ax_3d_timeterms.plot(self.new_x_timeterms,self.new_y_timeterms,self.gz_timeterms,c = self.layer1_color)
                     if self.layer2: ax_3d_timeterms.plot(self.new_x_timeterms,self.new_y_timeterms,self.z_layer2,c = self.layer2_color)
@@ -1893,11 +2027,11 @@ E-mail: vjs279@hotmail.com
 
                 if self.tomoPlot:
 
-                    fx = interp1d(self.coords_3d[0],self.coords_3d[1], kind = "linear", fill_value = "extrapolate")
-                    fy = interp1d(self.coords_3d[0],self.coords_3d[2], kind = "linear", fill_value = "extrapolate")
+                    fx = interp1d(dist, x, kind = "linear", bounds_error = False, fill_value = "extrapolate")
+                    fy = interp1d(dist, y, kind = "linear", bounds_error = False, fill_value = "extrapolate")
                     self.new_x_tomography = fx(self.tomoModel_x)
                     self.new_y_tomography = fy(self.tomoModel_x)
-                    ax_coords.plot(self.coords_3d[1],self.coords_3d[2],c="k")
+                    ax_coords.plot(x, y, c="k")
                     cm = ax_3d_tomo.scatter(self.new_x_tomography,self.new_y_tomography,self.tomoModel_z,c = self.tomoModel_v, cmap = self.colormap, s = self.dx)
                     self.tomography_3d_ready = True
                 
@@ -1946,7 +2080,8 @@ E-mail: vjs279@hotmail.com
                         
                         for art in self.ax_tomography.collections:
 
-                            if str(type(art)) == "<class 'matplotlib.collections.LineCollection'>": art.remove()
+                            if isinstance(art, LineCollection):
+                                art.remove()
 
                         self.fig_tomography.canvas.draw()
 

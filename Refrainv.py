@@ -1427,7 +1427,7 @@ E-mail: vjs279@hotmail.com
               "nan_added=", int(nan_after - nan_before))
 
         cm = self.ax_tomography.contourf(xi, zi, np.ma.masked_invalid(vi), levels=nlevels, cmap=self.colormap,
-                                         extend="both", vmin=self.minVelLimit, vmax=self.maxVelLimit)
+                                         extend="neither", vmin=self.minVelLimit, vmax=self.maxVelLimit)
         self.cmPlot = cm
 
         divider = make_axes_locatable(self.ax_tomography)

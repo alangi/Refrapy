@@ -1221,6 +1221,14 @@ E-mail: vjs279@hotmail.com
             if self.coverageVector is not None and len(self.coverageVector) == len(model):
                 modelMasked = model.copy()
                 modelMasked[np.asarray(self.coverageVector) == 0] = np.nan
+
+                print(
+                    "coverage mask debug:",
+                    "model cells =", len(model),
+                    "finite after coverage =", int(np.count_nonzero(np.isfinite(modelMasked))),
+                    "masked =", int(np.count_nonzero(~np.isfinite(modelMasked)))
+                )
+
                 return modelMasked
 
         return model
@@ -1375,7 +1383,20 @@ E-mail: vjs279@hotmail.com
         x_valid = x[valid]
         z_valid = z[valid]
         v_valid = v[valid]
+
+        print(
+            "contour input debug:",
+            "len x =", len(x),
+            "len valid =", int(np.count_nonzero(valid))
+        )
+
         vi = griddata((x_valid, z_valid), v_valid,(xi,zi), method = 'linear', fill_value=np.nan)
+
+        print(
+            "grid debug:",
+            "finite vi =", int(np.count_nonzero(np.isfinite(vi))),
+            "total vi =", int(vi.size)
+        )
 
         x_arc = None
         z_arc = None
@@ -1450,24 +1471,6 @@ E-mail: vjs279@hotmail.com
             z_arc_plot = np.interp(xi[0, :], x_arc, z_arc, left=z_arc[0], right=z_arc[-1])
             self._arcLine, = self.ax_tomography.plot(xi[0, :], z_arc_plot, "k--", lw=1.0, zorder=200)
             self._limitLine, = self.ax_tomography.plot(xi[0, :], z_limit[0, :], "r--", lw=1.0, zorder=200)
-        
-        limits = [(i,j) for i,j in zip(xblank,zblank)]
-        
-        clippath = Path(limits)
-        patch = PathPatch(clippath, facecolor='none', alpha = 0)
-        self.ax_tomography.add_patch(patch)
-
-        # Matplotlib compatibility: QuadContourSet API changed across versions
-        if hasattr(cm, "collections"):
-            artists = cm.collections
-        elif hasattr(cm, "artists"):
-            artists = cm.artists
-        else:
-            # Fallback: nothing to iterate, avoid hard crash
-            artists = []
-
-        for c in artists:
-            c.set_clip_path(patch)
 
         if self.showRayPath:
             self.mgr.drawRayPaths(self.ax_tomography,color=self.rayPathColor)
